@@ -12,8 +12,8 @@ from agents.dqn_agent import DQNAgent
 from gridworld_generator import HotelGenerator 
 
 # --- STATE REPRESENTATION FOR DQN ---
-NUM_DQN_CHANNELS = 9 # MODIFIED: Owner, Player (Visible), Walls, Doors, Hallways, Room Floors, Hiding Spots, Exit, Sounds
-SOUND_PERCEPTION_RADIUS = 7 # How far the owner can "hear" a sound event from its source tile (adjust as needed)
+NUM_DQN_CHANNELS = 9 
+SOUND_PERCEPTION_RADIUS = 12
 
 def get_dqn_state_representation(game_instance, grid_height, grid_width):
     """
@@ -87,15 +87,15 @@ def train_agent():
     os.makedirs(PLOTS_DIR, exist_ok=True)
     # --- END DIRECTORY SETUP ---
 
-    # Game and Agent parameters
+    # Game parameters
     GRID_HEIGHT = 30
     GRID_WIDTH = 40
     PLAYER_MOVES_PER_TURN = 2
 
     game_params = {
         'straightness_hallways': 0.9,
-        'hall_loops': 12,
-        'max_hallway_perc': 0.15,
+        'hall_loops': 18,
+        'max_hallway_perc': 0.25,
         'max_rooms': 20,
         'room_min_size': 3,
         'room_max_size': 4,
@@ -103,8 +103,8 @@ def train_agent():
     }
 
     # DQN Agent parameters
-    NUM_EPISODES = 10000
-    MAX_TURNS_PER_EPISODE = 400 # You had this at 400 for testing
+    NUM_EPISODES = 1
+    MAX_TURNS_PER_EPISODE = 50
     LEARNING_RATE = 0.0005
     DISCOUNT_FACTOR = 0.99
     EXPLORATION_RATE_INITIAL = 1.0
@@ -116,7 +116,7 @@ def train_agent():
     LEARN_START_STEPS = 2500
     LEARN_EVERY_N_STEPS = 4
 
-    # Rewards (can be tuned)
+    # Rewards
     REWARD_CATCH_PLAYER = 100
     REWARD_PLAYER_ESCAPES = -100
     REWARD_BUMP_WALL = -10
@@ -154,10 +154,7 @@ def train_agent():
             game = Game(width=GRID_WIDTH, height=GRID_HEIGHT, player_moves_per_turn=PLAYER_MOVES_PER_TURN, generator_params=game_params)
             game.print_grid_with_entities(player_pov=False)
 
-            if game.exit_pos:
-                player_knows_exit_pos = game.exit_pos
-            else:
-                player_knows_exit_pos = None
+            player_knows_exit_pos = game.exit_pos
             
             current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH)
             episode_reward = 0
