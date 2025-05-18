@@ -44,48 +44,25 @@ class Game:
     def _initialize_game(self, generator_params):
         self.grid = self.generator.generate_hotel(**generator_params)
         self.rooms_data = self.generator.rooms
-
-        player_start_pos = None
-        owner_start_pos = None
         
         for r, row in enumerate(self.grid):
             for c, tile in enumerate(row):
                 if tile == HotelGenerator.PLAYER:
-                    player_start_pos = (r, c)
+                    self.player_start_pos = (r, c)
                     # We'll replace 'P' with its underlying tile after finding all special tiles
                 elif tile == HotelGenerator.OWNER:
-                    owner_start_pos = (r, c)
+                    self.owner_start_pos = (r, c)
                     # We'll replace 'O' similarly
                 elif tile == HotelGenerator.EXIT:
                     self.exit_pos = (r,c)
 
-        # Determine underlying tiles for P and O before removing them
-        if player_start_pos:
-            self.player_pos = player_start_pos
-            self.grid[player_start_pos[0]][player_start_pos[1]] = self._determine_underlying_tile(player_start_pos[0], player_start_pos[1])
-        else:
-            print("Warning: Player not found in generated grid. Attempting fallback placement.")
-            self.player_pos = self._find_random_empty_tile([HotelGenerator.ROOM_FLOOR, HotelGenerator.HALLWAY])
-            if self.player_pos is None: raise Exception("Could not place Player.")
-
-
-        if owner_start_pos:
-            self.owner_pos = owner_start_pos
-            self.grid[owner_start_pos[0]][owner_start_pos[1]] = self._determine_underlying_tile(owner_start_pos[0], owner_start_pos[1])
-        else:
-            print("Warning: Owner not found in generated grid. Attempting fallback placement.")
-            exclude_list = [self.player_pos] if self.player_pos else []
-            self.owner_pos = self._find_random_empty_tile([HotelGenerator.ROOM_FLOOR, HotelGenerator.HALLWAY], exclude_pos=exclude_list)
-            if self.owner_pos is None: raise Exception("Could not place Owner.")
-
-        if not self.exit_pos:
-            print("CRITICAL: Exit not found in generated grid! Attempting fallback.")
-            self.exit_pos = self._find_random_empty_tile([HotelGenerator.WALL], on_border=True) # Place exit on a border wall
-            if self.exit_pos:
-                self.grid[self.exit_pos[0]][self.exit_pos[1]] = HotelGenerator.EXIT
-            else:
-                 raise Exception("Could not place Exit.")
-
+        self.player_pos = self.player_start_pos
+        r_p, c_p = self.player_pos
+        self.grid[r_p][c_p] = self._determine_underlying_tile(r_p, c_p)
+        
+        self.owner_pos = self.owner_start_pos
+        r_o, c_o = self.owner_pos
+        self.grid[r_o][c_o] = self._determine_underlying_tile(r_o, c_o)
 
         self.player_moves_taken_this_turn = 0
         self.game_over = False
@@ -121,63 +98,67 @@ class Game:
 
     def get_room_player_is_in(self, player_r, player_c):
         """Checks if the player at (player_r, player_c) is inside the floor area of any primary room."""
-        if not self.rooms_data:
-            return None
         for room_info in self.rooms_data:
-            # Consider only primary room definitions (those without 'door_pos' key or where 'is_door_entry' is False)
-            if not room_info.get('door_pos') and not room_info.get('is_door_entry'): # Check for primary room
-                r, c, h, w = room_info['r'], room_info['c'], room_info['height'], room_info['width']
-                # Check if (player_r, player_c) is within the room's floor boundaries
-                # Ensure it's strictly inside, not on the wall perimeter
-                if r <= player_r < r + h and \
-                   c <= player_c < c + w and \
-                   self.grid[player_r][player_c] == HotelGenerator.ROOM_FLOOR:
-                    return room_info # Return the primary room object
+            r, c, h, w = room_info['r'], room_info['c'], room_info['height'], room_info['width']
+            # Check if (player_r, player_c) is within the room's floor boundaries
+            # Ensure it's strictly inside, not on the wall perimeter
+            if r <= player_r < r + h and c <= player_c < c + w and \
+                self.grid[player_r][player_c] == HotelGenerator.ROOM_FLOOR:
+                return room_info # Return the primary room object
         return None
 
     def get_doors_for_room(self, room_obj):
         """
         Finds all door tiles associated with a given primary room_obj
         and returns their details including connected_hallway.
-        room_obj is a dictionary for a primary room.
+        room_obj is a dictionary for a primary room, where r, c, height, width define the floor.
         """
         if not room_obj or not self.rooms_data:
+            print("Invalid room object or no rooms data available.")
             return []
 
         doors_details = []
         room_r, room_c, room_h, room_w = room_obj['r'], room_obj['c'], room_obj['height'], room_obj['width']
 
-        # Iterate over the perimeter of the room_obj
-        # Top and Bottom walls
-        for col in range(room_c, room_c + room_w):
-            for row_val in [room_r, room_r + room_h - 1]:
-                if self._is_valid_pos(row_val, col) and self.grid[row_val][col] == HotelGenerator.DOOR:
-                    door_specific_room_data = self._get_room_at_door(row_val, col)
+        # Helper to add door details if found and valid
+        def add_door_detail_if_valid(r_door, c_door, details_list):
+            if self._is_valid_pos(r_door, c_door) and self.grid[r_door][c_door] == HotelGenerator.DOOR:
+                # Check if this door position has already been added to avoid duplicates
+                # (e.g. if a door is at a corner and somehow processed by two wall checks, though this logic avoids it)
+                door_pos_tuple = (r_door, c_door)
+                if not any(d['door_pos'] == door_pos_tuple for d in details_list):
+                    door_specific_room_data = self._get_room_at_door(r_door, c_door)
                     if door_specific_room_data and door_specific_room_data.get('connected_hallway'):
-                        doors_details.append({
-                            'door_pos': (row_val, col),
+                        details_list.append({
+                            'door_pos': door_pos_tuple,
                             'connected_hallway': door_specific_room_data['connected_hallway']
                         })
-        # Left and Right walls (avoid double counting corners)
-        for row in range(room_r + 1, room_r + room_h - 1):
-            for col_val in [room_c, room_c + room_w - 1]:
-                if self._is_valid_pos(row, col_val) and self.grid[row][col_val] == HotelGenerator.DOOR:
-                    door_specific_room_data = self._get_room_at_door(row, col_val)
-                    if door_specific_room_data and door_specific_room_data.get('connected_hallway'):
-                         doors_details.append({
-                            'door_pos': (row, col_val),
-                            'connected_hallway': door_specific_room_data['connected_hallway']
-                        })
-        # Deduplicate if any door was found twice (e.g. if room is 1x1 and door is a corner)
-        # This is a simple deduplication based on door_pos
-        final_doors = []
-        seen_door_pos = set()
-        for door_info in doors_details:
-            if door_info['door_pos'] not in seen_door_pos:
-                final_doors.append(door_info)
-                seen_door_pos.add(door_info['door_pos'])
-        return final_doors
 
+        # Check Top Wall (row = room_r - 1)
+        # Columns from room_c to room_c + room_w - 1
+        wall_r_top = room_r - 1
+        for col_idx in range(room_c, room_c + room_w):
+            add_door_detail_if_valid(wall_r_top, col_idx, doors_details)
+
+        # Check Bottom Wall (row = room_r + room_h)
+        # Columns from room_c to room_c + room_w - 1
+        wall_r_bottom = room_r + room_h
+        for col_idx in range(room_c, room_c + room_w):
+            add_door_detail_if_valid(wall_r_bottom, col_idx, doors_details)
+
+        # Check Left Wall (col = room_c - 1)
+        # Rows from room_r to room_r + room_h - 1
+        wall_c_left = room_c - 1
+        for row_idx in range(room_r, room_r + room_h):
+            add_door_detail_if_valid(row_idx, wall_c_left, doors_details)
+
+        # Check Right Wall (col = room_c + room_w)
+        # Rows from room_r to room_r + room_h - 1
+        wall_c_right = room_c + room_w
+        for row_idx in range(room_r, room_r + room_h):
+            add_door_detail_if_valid(row_idx, wall_c_right, doors_details)
+            
+        return doors_details
 
     def is_pos_in_room_or_door(self, r, c, room_obj, target_door_pos):
         """
@@ -243,6 +224,7 @@ class Game:
                         return True
                 return False 
             else: # Moving from Room into Hallway
+                print("Player moving from Room to Hallway")
                 self.player_pos = room_connected['connected_hallway']
                 # Player used the door at (new_r, new_c)
                 self.sound_alerts.append({'type': 'DOOR_USAGE_PLAYER', 'pos': (new_r, new_c), 'room_id': id(room_connected)})
@@ -326,12 +308,6 @@ class Game:
                 if r_offset**2 + c_offset**2 <= radius**2:
                     r, c = center_r + r_offset, center_c + c_offset
                     if self._is_valid_pos(r, c):
-                        # Add Line of Sight (LoS) check here
-                        # For now, basic: if it's a wall, it blocks unless it's the tile itself.
-                        # A real LoS would trace a line from center to (r,c) and check for walls.
-                        # If self._get_tile(r,c) == HotelGenerator.WALL and (r,c) != (center_r, center_c):
-                        # if not self._has_clear_los(center_r, center_c, r, c):
-                        # continue
                         visible.add((r,c))
         return visible
 
@@ -376,13 +352,7 @@ class Game:
         seen_world = {}
         for r_coord, c_coord in visible_coords:
             if not self._has_clear_los(self.player_pos[0], self.player_pos[1], r_coord, c_coord):
-                # If LoS is blocked, player might see a wall or nothing (depends on game rules)
-                # For now, let's assume they see the first wall that blocks LoS, or the tile if LoS is clear.
-                # This part needs careful thought for what the player actually perceives.
-                # A simple approach: if LoS is blocked, they don't see that specific (r_coord, c_coord).
-                # However, _get_visible_tiles + _has_clear_los should handle this.
-                # If _has_clear_los is accurate, we only process tiles with clear LoS.
-                continue # Skip if LoS is blocked by a wall to this specific tile
+                continue # Skip if LoS is blocked
 
             tile_on_grid = self.grid[r_coord][c_coord]
             if (r_coord, c_coord) == self.owner_pos:
@@ -466,7 +436,6 @@ class Game:
         # Ensure P/O are shown if player_pov and they are at their own loc
         if player_pov and self.player_pos in player_vision_map :
              display_grid[self.player_pos[0]][self.player_pos[1]] = HotelGenerator.PLAYER
-
 
         for row in display_grid:
             print("".join(row))

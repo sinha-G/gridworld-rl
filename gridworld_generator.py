@@ -41,10 +41,9 @@ class HotelGenerator:
             print("".join(row))
         print("-" * self.width)
 
-    def generate_hotel(self, straightness_hallways=0.75, hall_loops=30, 
-                       max_hallway_perc=0.20, # Added new parameter with default
-                       max_rooms=10, room_min_size=3, room_max_size=4,
-                       max_hiding_spots_per_room=2):
+    def generate_hotel(self, straightness_hallways, hall_loops, 
+                       max_hallway_perc=0.20, max_rooms=10, room_min_size=3, 
+                       room_max_size=4, max_hiding_spots_per_room=1):
         """
         Generates the full hotel layout.
         Returns the grid (list of lists of strings).
@@ -96,20 +95,11 @@ class HotelGenerator:
         """
         
         margin = 1 
-        valid_start = False
-        for _ in range(100):
-            r = random.randint(margin, self.height - 1 - margin)
-            c = random.randint(margin, self.width - 1 - margin)
-            if r % 2 == 1 and c % 2 == 1 and self._is_valid(r,c, margin):
-                start_r, start_c = r, c
-                valid_start = True
-                break
-        if not valid_start:
-            start_r = (self.height // 2) | 1 
-            start_c = (self.width // 2) | 1
-            if not self._is_valid(start_r,start_c, margin):
-                start_r = margin if margin < self.height -1 - margin else self.height // 2
-                start_c = margin if margin < self.width -1 - margin else self.width // 2
+        start_r = (self.height // 2) | 1 
+        start_c = (self.width // 2) | 1
+        if not self._is_valid(start_r,start_c, margin):
+            start_r = margin if margin < self.height -1 - margin else self.height // 2
+            start_c = margin if margin < self.width -1 - margin else self.width // 2
 
         self.grid[start_r][start_c] = self.HALLWAY
         
@@ -123,10 +113,9 @@ class HotelGenerator:
         
         target_hallway_cells = int(total_carvable_cells * max_hallway_percentage)
         # Ensure a minimum reasonable number of hallway cells are targeted
-        min_target_hallways = (self.height + self.width) // 2 # Heuristic minimum
+        min_target_hallways = (self.height + self.width)       # Heuristic minimum
         if target_hallway_cells < min_target_hallways : target_hallway_cells = min_target_hallways
         if target_hallway_cells < 1 : target_hallway_cells = 1 # Absolute minimum
-
 
         stack = [(start_r, start_c, -1)] 
         
@@ -374,7 +363,6 @@ class HotelGenerator:
 
                 if self._can_place_room_at(floor_r, floor_c, room_h, room_w,
                                            door_site_r, door_site_c, hall_r, hall_c):
-                    # ... (rest of the room placement logic) ...
                     # (This part seems okay if _can_place_room_at is correct)
                     for r_offset in range(room_h):
                         for c_offset in range(room_w):
@@ -540,72 +528,89 @@ class HotelGenerator:
             print(f"CRITICAL: No hallway tiles available to spawn {char_tile}!")
 
     def _place_exit_tile(self):
-        """Places the Exit tile adjacent to a hallway tile, replacing a wall (preferably on border)."""
-        possible_exit_walls = [] # List of ( (exit_r, exit_c), is_border_wall_flag )
-        for r in range(self.height):
-            for c in range(self.width):
-                if self.grid[r][c] == self.HALLWAY:
+        """Places the Exit tile, prioritizing walls adjacent to exactly one hallway tile,
+        not adjacent to doors or room floors, and preferably on the border."""
+        possible_exit_sites = [] # List of ( (exit_r, exit_c), is_border_wall_flag )
+
+        for r_wall in range(self.height):
+            for c_wall in range(self.width):
+                if self.grid[r_wall][c_wall] == self.WALL:
+                    hallway_neighbors = 0
+                    problematic_neighbors = 0 # Counts adjacent Doors or Room Floors
+
                     for dr, dc in self.DIRECTIONS:
-                        wall_r, wall_c = r + dr, c + dc
-                        if self._is_valid(wall_r, wall_c) and self.grid[wall_r][wall_c] == self.WALL:
-                            is_border = (wall_r == 0 or wall_r == self.height - 1 or \
-                                         wall_c == 0 or wall_c == self.width - 1)
-                            possible_exit_walls.append(((wall_r, wall_c), is_border))
+                        nr, nc = r_wall + dr, c_wall + dc
+                        if self._is_valid(nr, nc):
+                            neighbor_tile = self.grid[nr][nc]
+                            if neighbor_tile == self.HALLWAY:
+                                hallway_neighbors += 1
+                            elif neighbor_tile == self.DOOR or neighbor_tile == self.ROOM_FLOOR:
+                                problematic_neighbors += 1
+                    
+                    if hallway_neighbors == 1 and problematic_neighbors == 0:
+                        is_border = (r_wall == 0 or r_wall == self.height - 1 or \
+                                     c_wall == 0 or c_wall == self.width - 1)
+                        possible_exit_sites.append(((r_wall, c_wall), is_border))
 
-        chosen_exit_site = None # Initialize to None
+        chosen_exit_site = None
 
-        if possible_exit_walls:
-            # Prefer border walls that are adjacent to hallways
-            border_exit_coords = [site_coords for site_coords, is_b in possible_exit_walls if is_b]
+        if possible_exit_sites:
+            # Prefer border walls that meet the new criteria
+            border_exit_coords = [site_coords for site_coords, is_b in possible_exit_sites if is_b]
             if border_exit_coords:
                 chosen_exit_site = random.choice(border_exit_coords)
             else:
-                # No border walls found, so pick from any wall adjacent to a hallway
-                all_possible_coords = [site_coords for site_coords, _ in possible_exit_walls]
-                # This check 'if all_possible_coords' is technically redundant if possible_exit_walls is not empty,
-                # but it's safe.
-                if all_possible_coords:
+                # No border walls found, so pick from any wall meeting the new criteria
+                all_possible_coords = [site_coords for site_coords, _ in possible_exit_sites]
+                if all_possible_coords: # Should be true if possible_exit_sites is not empty
                     chosen_exit_site = random.choice(all_possible_coords)
         
-        if chosen_exit_site: # This should be a tuple (r,c) or None
-            if isinstance(chosen_exit_site, tuple) and len(chosen_exit_site) == 2:
-                self.grid[chosen_exit_site[0]][chosen_exit_site[1]] = self.EXIT
-                # print(f"Exit placed at {chosen_exit_site}.")
+        if chosen_exit_site:
+            self.grid[chosen_exit_site[0]][chosen_exit_site[1]] = self.EXIT
+            # print(f"Exit placed at {chosen_exit_site} based on new criteria.")
+        else:
+            # Fallback: Try original logic if new criteria yield no results
+            # print("Warning: New exit criteria yielded no valid spots. Falling back to original logic.")
+            original_possible_exit_walls = []
+            for r in range(self.height):
+                for c in range(self.width):
+                    if self.grid[r][c] == self.HALLWAY:
+                        for dr, dc in self.DIRECTIONS:
+                            wall_r, wall_c = r + dr, c + dc
+                            if self._is_valid(wall_r, wall_c) and self.grid[wall_r][wall_c] == self.WALL:
+                                is_border = (wall_r == 0 or wall_r == self.height - 1 or \
+                                             wall_c == 0 or wall_c == self.width - 1)
+                                original_possible_exit_walls.append(((wall_r, wall_c), is_border))
+            
+            fallback_chosen_site = None
+            if original_possible_exit_walls:
+                border_fallback_coords = [site_coords for site_coords, is_b in original_possible_exit_walls if is_b]
+                if border_fallback_coords:
+                    fallback_chosen_site = random.choice(border_fallback_coords)
+                else:
+                    all_fallback_coords = [site_coords for site_coords, _ in original_possible_exit_walls]
+                    if all_fallback_coords:
+                        fallback_chosen_site = random.choice(all_fallback_coords)
+            
+            if fallback_chosen_site:
+                self.grid[fallback_chosen_site[0]][fallback_chosen_site[1]] = self.EXIT
+                # print(f"Exit placed at {fallback_chosen_site} using original fallback logic.")
             else:
-                # This else block is for debugging the persistent TypeError
-                # print(f"CRITICAL DEBUG: chosen_exit_site is NOT a valid tuple: {chosen_exit_site}, type: {type(chosen_exit_site)}")
-                # Fallback to prevent crash, though exit won't be placed correctly by this path
-                # print("Attempting fallback exit placement due to error in chosen_exit_site logic.")
-                # (The original fallback logic is now duplicated here for safety if chosen_exit_site was bad)
+                # Further Fallback: Place on any border hallway if still no exit
+                # print("Warning: Original exit logic also failed. Attempting to place on any border hallway.")
                 border_hallways = []
                 for r_idx in range(self.height):
                     for c_idx in range(self.width):
                         if (r_idx == 0 or r_idx == self.height - 1 or c_idx == 0 or c_idx == self.width - 1) and \
                            self.grid[r_idx][c_idx] == self.HALLWAY:
                             border_hallways.append((r_idx, c_idx))
+                
                 if border_hallways:
                     exit_r, exit_c = random.choice(border_hallways)
                     self.grid[exit_r][exit_c] = self.EXIT
-                    # print(f"Placed EXIT directly on border hallway tile ({exit_r},{exit_c}) via CRITICAL DEBUG fallback.")
+                    # print(f"Placed EXIT directly on border hallway tile ({exit_r},{exit_c}) as final fallback.")
                 else:
-                    # print("CRITICAL DEBUG: No suitable fallback location for EXIT found!")
-                    return # Important to return to avoid proceeding with a bad chosen_exit_site
-
-        else: # chosen_exit_site is None because possible_exit_walls was empty
-            # print("Warning: No walls adjacent to hallways found for Exit. Attempting to place on border hallway.")
-            border_hallways = []
-            for r_idx in range(self.height):
-                for c_idx in range(self.width):
-                    if (r_idx == 0 or r_idx == self.height - 1 or c_idx == 0 or c_idx == self.width - 1) and \
-                       self.grid[r_idx][c_idx] == self.HALLWAY:
-                        border_hallways.append((r_idx, c_idx))
-            
-            if border_hallways:
-                exit_r, exit_c = random.choice(border_hallways)
-                self.grid[exit_r][exit_c] = self.EXIT
-                print(f"Placed EXIT directly on border hallway tile ({exit_r},{exit_c}).")
-            else:
-                print("CRITICAL: No suitable location for EXIT found (no walls near hallways, no border hallways)!")
+                    print("CRITICAL: No suitable location for EXIT found even with all fallbacks!")
 
     def _validate_hallway_adjacencies(self):
         """
@@ -628,13 +633,13 @@ class HotelGenerator:
 
 # --- Example Usage ---
 if __name__ == '__main__':
-    hotel_gen = HotelGenerator(width=40, height=30) 
+    hotel_gen = HotelGenerator(width=80, height=20) 
     try:
         grid = hotel_gen.generate_hotel(
-            straightness_hallways=0.9, # higher for straigher hallways
-            hall_loops= 12,             # e.g., 24 loops for 40x30 grid
-            max_hallway_perc=0.15,     # proportion of grid to be hallways
-            max_rooms=20,              # number of rooms to place
+            straightness_hallways=0.9,   # higher for straigher hallways
+            hall_loops= 18,              # e.g., 24 loops for 40x30 grid
+            max_hallway_perc=0.25,       # proportion of grid to be hallways
+            max_rooms=20,                # number of rooms to place
             room_min_size=3,
             room_max_size=4,
             max_hiding_spots_per_room=1
@@ -645,11 +650,7 @@ if __name__ == '__main__':
         exit_found = any(hotel_gen.EXIT in row for row in grid)
         print(f"Player found: {player_found}, Owner found: {owner_found}, Exit found: {exit_found}")
         print(f"Total rooms with doors: {len([room for room in hotel_gen.rooms if room.get('has_door')])}")
-
-    except ValueError as e:
-        print(f"Error during generation: {e}")
+        
     except Exception as e: 
         print(f"An unexpected error occurred: {e}")
-        import traceback
-        traceback.print_exc()
         
