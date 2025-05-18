@@ -51,40 +51,39 @@ class HotelGenerator:
         """
         self._initialize_grid()
 
-        print("1. Generating hallways...")
+        # print("1. Generating hallways...")
         self._generate_hallways_dfs_like(straightness_factor=straightness_hallways, 
                                          num_additional_loops=hall_loops,
                                          max_hallway_percentage=max_hallway_perc) # Pass it here
 
-        # ... (rest of generate_hotel method is the same) ...
-        print("2. Placing rooms...")
+        # print("2. Placing rooms...")
         self._place_rooms_off_hallways(max_rooms_to_place=max_rooms,
                                        min_dim=room_min_size, max_dim=room_max_size)
 
-        print("3. Adding doors to rooms...")
+        # print("3. Adding doors to rooms...")
         self._add_doors_to_all_rooms()
         
-        self.rooms = [room for room in self.rooms if room.get('has_door')]
+        # self.rooms = [room for room in self.rooms if room.get('has_door')]
 
-        if not self.rooms:
-            print("Warning: No rooms with doors were successfully generated. Player/Owner/Exit may not be placed correctly.")
-        else:
-            print(f"Successfully generated {len(self.rooms)} rooms with doors.")
+        # if not self.rooms:
+        #     print("Warning: No rooms with doors were successfully generated. Player/Owner/Exit may not be placed correctly.")
+        # else:
+        #     print(f"Successfully generated {len(self.rooms)} rooms with doors.")
         
-        print("4. Placing hiding spots...")
+        # print("4. Placing hiding spots...")
         self._place_hiding_spots_in_rooms(max_spots_per_room=max_hiding_spots_per_room)
 
-        print("5. Placing player and owner...")
+        # print("5. Placing player and owner...")
         self._place_characters()
 
-        print("6. Placing exit...")
+        # print("6. Placing exit...")
         self._place_exit_tile() 
 
-        print("7. Validating hallway adjacencies...")
-        if not self._validate_hallway_adjacencies():
-            print("Warning: Some hallway tiles have invalid adjacencies.")
+        # print("7. Validating hallway adjacencies...")
+        # if not self._validate_hallway_adjacencies():
+            # print("Warning: Some hallway tiles have invalid adjacencies.")
         
-        print("Hotel generation complete!")
+        # print("Hotel generation complete!")
         return self.grid
 
     def _generate_hallways_dfs_like(self, straightness_factor=0.75, 
@@ -197,7 +196,7 @@ class HotelGenerator:
             else:
                 stack.pop()
         
-        print(f"Hallway generation: Target hallway cells ~{target_hallway_cells}, Actual carved hallway cells: {hallway_cell_count}")
+        # print(f"Hallway generation: Target hallway cells ~{target_hallway_cells}, Actual carved hallway cells: {hallway_cell_count}")
 
         if num_additional_loops > 0 and hallway_cell_count > 0: # Ensure some hallways exist before trying to add loops
             loop_candidates = []
@@ -239,7 +238,7 @@ class HotelGenerator:
                 if self.grid[lr][lc] == self.WALL and (is_h_hwh or is_v_hwh):
                     self.grid[lr][lc] = self.HALLWAY
                     loops_created +=1
-            print(f"Attempted to create {num_additional_loops} additional loops, successfully created {loops_created}.")
+            # print(f"Attempted to create {num_additional_loops} additional loops, successfully created {loops_created}.")
 
 
     def _can_place_room_at(self, room_r, room_c, room_h, room_w,
@@ -256,25 +255,25 @@ class HotelGenerator:
         # The room's walls are at room_r-1, room_r+room_h, room_c-1, room_c+room_w
         if not (self._is_valid(room_r - 1, room_c - 1) and    # Top-left corner of wall structure
                   self._is_valid(room_r + room_h, room_c + room_w)): # Bottom-right corner of wall structure
-            print(f"Debug: Overall bounds check failed for room at {room_r},{room_c} ({room_h}x{room_w})")
+            # print(f"Debug: Overall bounds check failed for room at {room_r},{room_c} ({room_h}x{room_w})")
             return False
 
         # 2. Check the hallway connection tile (must be existing HALLWAY)
         if not (self._is_valid(hall_conn_r, hall_conn_c) and \
                 self.grid[hall_conn_r][hall_conn_c] == self.HALLWAY):
-            print(f"Debug: Hallway connection tile ({hall_conn_r},{hall_conn_c}) is not HALLWAY.")
+            # print(f"Debug: Hallway connection tile ({hall_conn_r},{hall_conn_c}) is not HALLWAY.")
             return False
 
         # 3. Check the door site tile (must be existing WALL)
         if not (self._is_valid(door_site_r, door_site_c) and \
                 self.grid[door_site_r][door_site_c] == self.WALL):
-            print(f"Debug: Door site tile ({door_site_r},{door_site_c}) is not WALL.")
+            # print(f"Debug: Door site tile ({door_site_r},{door_site_c}) is not WALL.")
             return False
 
         # 4. Check adjacency of door site and hallway connection (Manhattan distance should be 1)
         if abs(door_site_r - hall_conn_r) + abs(door_site_c - hall_conn_c) != 1:
              # This would typically indicate a logical error in how these parameters were derived by the caller
-             print(f"Debug: Door site ({door_site_r},{door_site_c}) not strictly adjacent to hall connection ({hall_conn_r},{hall_conn_c}).")
+            #  print(f"Debug: Door site ({door_site_r},{door_site_c}) not strictly adjacent to hall connection ({hall_conn_r},{hall_conn_c}).")
              return False
 
         # 5. Check the room's proposed floor area and its own walls
@@ -289,7 +288,7 @@ class HotelGenerator:
 
                 if is_part_of_floor:
                     if current_grid_tile_val != self.WALL:
-                        print(f"Debug: Proposed floor tile ({r_check},{c_check}) is not WALL, but '{current_grid_tile_val}'.")
+                        # print(f"Debug: Proposed floor tile ({r_check},{c_check}) is not WALL, but '{current_grid_tile_val}'.")
                         return False # Floor area must be carved from wall
                 elif is_the_door_site:
                     # This was already checked in step 3 to be WALL.
@@ -297,11 +296,11 @@ class HotelGenerator:
                 elif is_the_hall_connection:
                     # The room's own structure (floor/walls) should not overlap the hallway tile it connects to.
                     # If (r_check,c_check) is the hall_conn_tile, it means the room's bounding box includes it, which is wrong.
-                    print(f"Debug: Room structure at ({r_check},{c_check}) conflicts with hall connection tile ({hall_conn_r},{hall_conn_c}).")
+                    # print(f"Debug: Room structure at ({r_check},{c_check}) conflicts with hall connection tile ({hall_conn_r},{hall_conn_c}).")
                     return False
                 else: # This is a proposed wall of the room (not the door_site wall)
                     if current_grid_tile_val != self.WALL:
-                        print(f"Debug: Proposed room wall tile ({r_check},{c_check}) is not WALL, but '{current_grid_tile_val}'.")
+                        # print(f"Debug: Proposed room wall tile ({r_check},{c_check}) is not WALL, but '{current_grid_tile_val}'.")
                         return False # Room's other walls must also be on existing WALLs
 
         # 6. Crucial Geometry Check: Ensure the door_site_is_validly_part_of_the_room's_perimeter.
@@ -314,7 +313,7 @@ class HotelGenerator:
 
         if not (door_on_north_wall or door_on_south_wall or door_on_west_wall or door_on_east_wall):
             # This indicates a mismatch between the room's floor coordinates and the door's position.
-            print(f"Debug: Door site ({door_site_r},{door_site_c}) is not geometrically aligned as a direct wall for room floor at ({room_r},{room_c}) dim ({room_h}x{room_w}).")
+            # print(f"Debug: Door site ({door_site_r},{door_site_c}) is not geometrically aligned as a direct wall for room floor at ({room_r},{room_c}) dim ({room_h}x{room_w}).")
             return False
         return True
 
@@ -367,7 +366,7 @@ class HotelGenerator:
 
                 if not (floor_is_valid and floor_end_is_valid):
                     # THIS IS THE CRITICAL DEBUG PRINT WE NEED TO SEE FOR NEGATIVE floor_r
-                    print(f"DEBUG_PRELIM_CHECK: floor_r={floor_r}, floor_c={floor_c}, room_h={room_h}, room_w={room_w}. floor_is_valid={floor_is_valid}, floor_end_is_valid={floor_end_is_valid}. SKIPPING.")
+                    # print(f"DEBUG_PRELIM_CHECK: floor_r={floor_r}, floor_c={floor_c}, room_h={room_h}, room_w={room_w}. floor_is_valid={floor_is_valid}, floor_end_is_valid={floor_end_is_valid}. SKIPPING.")
                     continue 
                 
                 # If preliminary check passed, print info before calling _can_place_room_at
@@ -457,7 +456,7 @@ class HotelGenerator:
 
     def _place_hiding_spots_in_rooms(self, max_spots_per_room=2):
         """Places 0 to max_spots_per_room hiding spots in each valid room."""
-        for room in self.rooms:
+        for room in [r for r in self.rooms if r.get('has_door')]:
             if not room.get('has_door'): continue # Skip rooms without a door
 
             placeable_tiles = self._get_placeable_tiles_in_room(room)
@@ -571,12 +570,12 @@ class HotelGenerator:
         if chosen_exit_site: # This should be a tuple (r,c) or None
             if isinstance(chosen_exit_site, tuple) and len(chosen_exit_site) == 2:
                 self.grid[chosen_exit_site[0]][chosen_exit_site[1]] = self.EXIT
-                print(f"Exit placed at {chosen_exit_site}.")
+                # print(f"Exit placed at {chosen_exit_site}.")
             else:
                 # This else block is for debugging the persistent TypeError
-                print(f"CRITICAL DEBUG: chosen_exit_site is NOT a valid tuple: {chosen_exit_site}, type: {type(chosen_exit_site)}")
+                # print(f"CRITICAL DEBUG: chosen_exit_site is NOT a valid tuple: {chosen_exit_site}, type: {type(chosen_exit_site)}")
                 # Fallback to prevent crash, though exit won't be placed correctly by this path
-                print("Attempting fallback exit placement due to error in chosen_exit_site logic.")
+                # print("Attempting fallback exit placement due to error in chosen_exit_site logic.")
                 # (The original fallback logic is now duplicated here for safety if chosen_exit_site was bad)
                 border_hallways = []
                 for r_idx in range(self.height):
@@ -587,13 +586,13 @@ class HotelGenerator:
                 if border_hallways:
                     exit_r, exit_c = random.choice(border_hallways)
                     self.grid[exit_r][exit_c] = self.EXIT
-                    print(f"Placed EXIT directly on border hallway tile ({exit_r},{exit_c}) via CRITICAL DEBUG fallback.")
+                    # print(f"Placed EXIT directly on border hallway tile ({exit_r},{exit_c}) via CRITICAL DEBUG fallback.")
                 else:
-                    print("CRITICAL DEBUG: No suitable fallback location for EXIT found!")
-                return # Important to return to avoid proceeding with a bad chosen_exit_site
+                    # print("CRITICAL DEBUG: No suitable fallback location for EXIT found!")
+                    return # Important to return to avoid proceeding with a bad chosen_exit_site
 
         else: # chosen_exit_site is None because possible_exit_walls was empty
-            print("Warning: No walls adjacent to hallways found for Exit. Attempting to place on border hallway.")
+            # print("Warning: No walls adjacent to hallways found for Exit. Attempting to place on border hallway.")
             border_hallways = []
             for r_idx in range(self.height):
                 for c_idx in range(self.width):
@@ -633,14 +632,13 @@ if __name__ == '__main__':
     try:
         grid = hotel_gen.generate_hotel(
             straightness_hallways=0.9, # higher for straigher hallways
-            hall_loops= 10,            # e.g., 24 loops for 40x30 grid
-            max_hallway_perc=0.20,     # proportion of grid to be hallways
-            max_rooms=15,              # number of rooms to place
+            hall_loops= 12,             # e.g., 24 loops for 40x30 grid
+            max_hallway_perc=0.15,     # proportion of grid to be hallways
+            max_rooms=20,              # number of rooms to place
             room_min_size=3,
             room_max_size=4,
             max_hiding_spots_per_room=1
         )
-        # ... (rest of the __main__ block) ...
         hotel_gen.print_grid()
         player_found = any(hotel_gen.PLAYER in row for row in grid)
         owner_found = any(hotel_gen.OWNER in row for row in grid)
