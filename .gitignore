@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 # Project specific
+logs/
 models/
 plots/
 q_tables/
