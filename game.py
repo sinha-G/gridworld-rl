@@ -107,58 +107,16 @@ class Game:
                 return room_info # Return the primary room object
         return None
 
-    def get_doors_for_room(self, room_obj):
+    def get_door_for_room(self, room_obj):
         """
-        Finds all door tiles associated with a given primary room_obj
+        Finds the door tile associated with a given primary room_obj
         and returns their details including connected_hallway.
         room_obj is a dictionary for a primary room, where r, c, height, width define the floor.
         """
         if not room_obj or not self.rooms_data:
-            print("Invalid room object or no rooms data available.")
             return []
-
-        doors_details = []
-        room_r, room_c, room_h, room_w = room_obj['r'], room_obj['c'], room_obj['height'], room_obj['width']
-
-        # Helper to add door details if found and valid
-        def add_door_detail_if_valid(r_door, c_door, details_list):
-            if self._is_valid_pos(r_door, c_door) and self.grid[r_door][c_door] == HotelGenerator.DOOR:
-                # Check if this door position has already been added to avoid duplicates
-                # (e.g. if a door is at a corner and somehow processed by two wall checks, though this logic avoids it)
-                door_pos_tuple = (r_door, c_door)
-                if not any(d['door_pos'] == door_pos_tuple for d in details_list):
-                    door_specific_room_data = self._get_room_at_door(r_door, c_door)
-                    if door_specific_room_data and door_specific_room_data.get('connected_hallway'):
-                        details_list.append({
-                            'door_pos': door_pos_tuple,
-                            'connected_hallway': door_specific_room_data['connected_hallway']
-                        })
-
-        # Check Top Wall (row = room_r - 1)
-        # Columns from room_c to room_c + room_w - 1
-        wall_r_top = room_r - 1
-        for col_idx in range(room_c, room_c + room_w):
-            add_door_detail_if_valid(wall_r_top, col_idx, doors_details)
-
-        # Check Bottom Wall (row = room_r + room_h)
-        # Columns from room_c to room_c + room_w - 1
-        wall_r_bottom = room_r + room_h
-        for col_idx in range(room_c, room_c + room_w):
-            add_door_detail_if_valid(wall_r_bottom, col_idx, doors_details)
-
-        # Check Left Wall (col = room_c - 1)
-        # Rows from room_r to room_r + room_h - 1
-        wall_c_left = room_c - 1
-        for row_idx in range(room_r, room_r + room_h):
-            add_door_detail_if_valid(row_idx, wall_c_left, doors_details)
-
-        # Check Right Wall (col = room_c + room_w)
-        # Rows from room_r to room_r + room_h - 1
-        wall_c_right = room_c + room_w
-        for row_idx in range(room_r, room_r + room_h):
-            add_door_detail_if_valid(row_idx, wall_c_right, doors_details)
             
-        return doors_details
+        return room_obj
 
     def is_pos_in_room_or_door(self, r, c, room_obj, target_door_pos):
         """
@@ -224,7 +182,7 @@ class Game:
                         return True
                 return False 
             else: # Moving from Room into Hallway
-                print("Player moving from Room to Hallway")
+                # print("Player moving from Room to Hallway")
                 self.player_pos = room_connected['connected_hallway']
                 # Player used the door at (new_r, new_c)
                 self.sound_alerts.append({'type': 'DOOR_USAGE_PLAYER', 'pos': (new_r, new_c), 'room_id': id(room_connected)})
@@ -411,7 +369,11 @@ class Game:
     def get_current_turn_entity(self):
         return "PLAYER" if self.player_moves_taken_this_turn < self.player_moves_per_turn else "OWNER"
 
-    def print_grid_with_entities(self, player_pov=False):
+    def render_grid_to_string(self, player_pov=False):
+        """
+        Renders the current grid state and entity information to a string.
+        """
+        output_lines = []
         display_grid = [row[:] for row in self.grid]
         
         player_vision_map = None
@@ -424,7 +386,7 @@ class Game:
                     if (r,c) in player_vision_map:
                         tile_to_display = player_vision_map[(r,c)]
                         if tile_to_display == "OWNER": display_grid[r][c] = HotelGenerator.OWNER
-                        elif tile_to_display == "PLAYER": display_grid[r][c] = HotelGenerator.PLAYER # Should be self
+                        elif tile_to_display == "PLAYER": display_grid[r][c] = HotelGenerator.PLAYER 
                         else: display_grid[r][c] = tile_to_display
                     else:
                         display_grid[r][c] = '?' # Fog of war
@@ -433,17 +395,32 @@ class Game:
                     elif (r,c) == self.owner_pos: display_grid[r][c] = HotelGenerator.OWNER
                     # Exit is already on self.grid
 
-        # Ensure P/O are shown if player_pov and they are at their own loc
-        if player_pov and self.player_pos in player_vision_map :
+        if player_pov and self.player_pos and self.player_pos in player_vision_map : # Ensure P is shown if player_pov
              display_grid[self.player_pos[0]][self.player_pos[1]] = HotelGenerator.PLAYER
+        elif not player_pov and self.player_pos: # Ensure P is shown in omniscient if exists
+            display_grid[self.player_pos[0]][self.player_pos[1]] = HotelGenerator.PLAYER
+        
+        if not player_pov and self.owner_pos: # Ensure O is shown in omniscient if exists
+            display_grid[self.owner_pos[0]][self.owner_pos[1]] = HotelGenerator.OWNER
+
 
         for row in display_grid:
-            print("".join(row))
+            output_lines.append("".join(row))
         
-        print("-" * self.generator.width)
-        print(f"Player: {self.player_pos} (Tile: {self._get_tile(self.player_pos[0], self.player_pos[1]) if self.player_pos else 'N/A'}) "
-              f"(Moves left: {self.player_moves_per_turn - self.player_moves_taken_this_turn})")
-        print(f"Owner: {self.owner_pos} (Tile: {self._get_tile(self.owner_pos[0], self.owner_pos[1]) if self.owner_pos else 'N/A'})")
-        print(f"Exit: {self.exit_pos}")
-        if self.sound_alerts: print(f"Sound Alerts: {self.sound_alerts}")
-        if self.game_over: print(f"GAME OVER! Winner: {self.winner}")
+        output_lines.append("-" * self.generator.width)
+        player_pos_str = f"Player: {self.player_pos} (Tile: {self._get_tile(self.player_pos[0], self.player_pos[1]) if self.player_pos else 'N/A'}) " \
+                         f"(Moves left this turn: {self.player_moves_per_turn - self.player_moves_taken_this_turn})"
+        output_lines.append(player_pos_str)
+        
+        owner_pos_str = f"Owner: {self.owner_pos} (Tile: {self._get_tile(self.owner_pos[0], self.owner_pos[1]) if self.owner_pos else 'N/A'})"
+        output_lines.append(owner_pos_str)
+        
+        output_lines.append(f"Exit: {self.exit_pos}")
+        if self.sound_alerts: output_lines.append(f"Sound Alerts: {self.sound_alerts}")
+        if self.game_over: output_lines.append(f"GAME OVER! Winner: {self.winner}")
+        
+        return "\n".join(output_lines)
+
+    def print_grid_with_entities(self, player_pov=False):
+        # This method can now optionally use the string rendering method
+        print(self.render_grid_to_string(player_pov=player_pov))

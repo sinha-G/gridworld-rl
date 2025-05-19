@@ -370,7 +370,7 @@ class HotelGenerator:
                     
                     self.rooms.append({
                         'r': floor_r, 'c': floor_c, 'height': room_h, 'width': room_w,
-                        'door_candidate_pos': (door_site_r, door_site_c),
+                        'door_pos': (door_site_r, door_site_c),
                         'connected_hallway': (hall_r, hall_c),
                         'has_door': False
                     })
@@ -380,13 +380,13 @@ class HotelGenerator:
     def _add_doors_to_all_rooms(self):
         """
         Iterates through all placed rooms and attempts to convert their
-        'door_candidate_pos' into an actual DOOR tile.
+        'door_pos' into an actual DOOR tile.
         Ensures each room gets exactly one door if conditions are met.
         """
         for room in self.rooms:
             if room['has_door']: continue # Already has a door (shouldn't happen here)
 
-            dr, dc = room['door_candidate_pos']
+            dr, dc = room['door_pos']
             hr, hc = room['connected_hallway'] # Hallway this door should connect to
 
             # Verify conditions: door candidate is WALL, connects to the specified HALLWAY,
@@ -633,14 +633,14 @@ class HotelGenerator:
 
 # --- Example Usage ---
 if __name__ == '__main__':
-    hotel_gen = HotelGenerator(width=80, height=20) 
+    hotel_gen = HotelGenerator(width=30, height=25) 
     try:
         grid = hotel_gen.generate_hotel(
             straightness_hallways=0.9,   # higher for straigher hallways
-            hall_loops= 18,              # e.g., 24 loops for 40x30 grid
+            hall_loops= 4,              # e.g., 24 loops for 40x30 grid
             max_hallway_perc=0.25,       # proportion of grid to be hallways
             max_rooms=20,                # number of rooms to place
-            room_min_size=3,
+            room_min_size=2,
             room_max_size=4,
             max_hiding_spots_per_room=1
         )
