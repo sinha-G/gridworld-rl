@@ -9,12 +9,12 @@ from tqdm import tqdm
 from collections import deque
 
 from game import Game 
-from agents.dqn_agent import DQNAgent 
+from agents.ppo_agent import PPOAgent 
 from gridworld_generator import HotelGenerator 
 
 # --- STATE REPRESENTATION FOR DQN ---
-NUM_DQN_CHANNELS = 8 
-SOUND_PERCEPTION_RADIUS = 1
+NUM_DQN_CHANNELS = 9
+SOUND_PERCEPTION_RADIUS = 5
 PLAYER_VISION_RADIUS = 0
 OWNER_VISION_RADIUS = 3
 
@@ -76,12 +76,12 @@ def get_dqn_state_representation(game_instance, grid_height, grid_width, static_
                 state_tensor_np[1, r_p, c_p] = 1.0
 
     # Channel 8: Sounds (from game_instance.sound_alerts)
-    # for sound_event in game_instance.sound_alerts:
-    #     if 'DOOR' in sound_event['type'].upper(): 
-    #         srow, scol = sound_event['pos']
-    #         orow, ocol = game_instance.owner_pos
-    #         if (srow - orow)**2 + (scol - ocol)**2 <= SOUND_PERCEPTION_RADIUS ** 2 and game_instance._is_valid_pos(srow, scol):
-    #             state_tensor_np[8, srow, scol] = 1.0
+    for sound_event in game_instance.sound_alerts:
+        if 'DOOR' in sound_event['type'].upper(): 
+            srow, scol = sound_event['pos']
+            orow, ocol = game_instance.owner_pos
+            if (srow - orow)**2 + (scol - ocol)**2 <= SOUND_PERCEPTION_RADIUS ** 2 and game_instance._is_valid_pos(srow, scol):
+                state_tensor_np[8, srow, scol] = 1.0
                  
     return torch.from_numpy(state_tensor_np)
 
@@ -158,7 +158,7 @@ def train_agent():
 
     game_params = {
         'straightness_hallways': 0.9,
-        'hall_loops': 0,
+        'hall_loops': 2,
         'max_hallway_perc': 0.05,
         'max_rooms': 0,
         'room_min_size': 2,
@@ -166,60 +166,86 @@ def train_agent():
         'max_hiding_spots_per_room': 1,
     }
 
-    # Training parameters
+    # # Training parameters for DQN
+    # NUM_EPISODES = 10000
+    # MAX_TURNS_PER_EPISODE = 40
+    # LEARNING_RATE = 0.0008
+    # DISCOUNT_FACTOR = 0.95
+    # EXPLORATION_RATE_INITIAL = 1.0
+    # EXPLORATION_DECAY_RATE = 0.9997
+    # MIN_EXPLORATION_RATE = 0.01
+    # REPLAY_BUFFER_SIZE = 50000
+    # BATCH_SIZE = 512
+    # TARGET_UPDATE_FREQUENCY = 1000
+    # LEARN_START_STEPS = 5000
+    # LEARN_EVERY_N_STEPS = 4
+    # PROXIMITY_THRESHOLD = 3
+    # LEARNING_RATE_DECAY_FACTOR = 0.95
+    # LEARNING_RATE_DECAY_FREQUENCY = 250
+    # MIN_LEARNING_RATE = 0.00001
+    # PHASE_2_START_EPISODE = 3000
+
+    # Training parameters for PPO
     NUM_EPISODES = 10000
-    MAX_TURNS_PER_EPISODE = 40
-    LEARNING_RATE = 0.0008
-    DISCOUNT_FACTOR = 0.95
-    EXPLORATION_RATE_INITIAL = 1.0
-    EXPLORATION_DECAY_RATE = 0.9997
-    MIN_EXPLORATION_RATE = 0.01
-    REPLAY_BUFFER_SIZE = 50000
-    BATCH_SIZE = 512
-    TARGET_UPDATE_FREQUENCY = 1000
-    LEARN_START_STEPS = 5000
-    LEARN_EVERY_N_STEPS = 4
-    PROXIMITY_THRESHOLD = 3
+    MAX_TURNS_PER_EPISODE = 100
+    LEARNING_RATE = 0.0005
+    GAMMA = 0.99 # Discount factor for PPO
+    GAE_LAMBDA = 0.95
+    PPO_CLIP_EPSILON = 0.2
+    PPO_EPOCHS = 10
+    MINI_BATCH_SIZE = 64 
+    ENTROPY_COEFFICIENT = 0.05
+    VALUE_LOSS_COEFFICIENT = 1
+    UPDATE_TIMESTEPS = 2048 # Number of owner steps to collect before PPO update
+    PHASE_2_START_EPISODE = 1000
+
+    # Learning rate decay (can be used with PPO optimizer)
     LEARNING_RATE_DECAY_FACTOR = 0.95
-    LEARNING_RATE_DECAY_FREQUENCY = 250
+    LEARNING_RATE_DECAY_FREQUENCY = 250 
     MIN_LEARNING_RATE = 0.00001
-    PHASE_2_START_EPISODE = 3000
+    current_learning_rate = LEARNING_RATE
 
     # Rewards
-    REWARD_CATCH_PLAYER = 150
+    REWARD_CATCH_PLAYER = 50
     REWARD_PLAYER_ESCAPES = -50
-    REWARD_BUMP_WALL = -3
-    REWARD_IN_ROOM = 0
-    REWARD_PROXIMITY = 10
-    REWARD_PLAYER_VISIBLE = 0
-    REWARD_BASE = -0.5
-    REWARD_PER_STEP = 2
+    REWARD_BUMP_WALL = -5
+    REWARD_IN_ROOM = 0 
+    REWARD_PROXIMITY = 25
+    PROXIMITY_THRESHOLD = 5
+    REWARD_PLAYER_VISIBLE = 0 
+    REWARD_BASE = -0.5 
+    REWARD_PER_STEP = 5
 
     game_actions_list = [Game.MOVE_NORTH, Game.MOVE_SOUTH, Game.MOVE_EAST, Game.MOVE_WEST, Game.WAIT]
 
-    owner_agent = DQNAgent(
+    owner_agent = PPOAgent(
         game_actions_list=game_actions_list,
-        input_channels=NUM_DQN_CHANNELS,
+        input_channels=NUM_DQN_CHANNELS, 
         grid_height=GRID_HEIGHT,
         grid_width=GRID_WIDTH,
-        learning_rate=LEARNING_RATE,
-        discount_factor=DISCOUNT_FACTOR,
-        exploration_rate_initial=EXPLORATION_RATE_INITIAL,
-        exploration_decay_rate=EXPLORATION_DECAY_RATE,
-        min_exploration_rate=MIN_EXPLORATION_RATE,
-        replay_buffer_size=REPLAY_BUFFER_SIZE,
-        batch_size=BATCH_SIZE,
-        target_update_frequency=TARGET_UPDATE_FREQUENCY
+        learning_rate=current_learning_rate,
+        gamma=GAMMA,
+        gae_lambda=GAE_LAMBDA,
+        ppo_clip_epsilon=PPO_CLIP_EPSILON,
+        ppo_epochs=PPO_EPOCHS,
+        mini_batch_size=MINI_BATCH_SIZE,
+        entropy_coefficient=ENTROPY_COEFFICIENT,
+        value_loss_coefficient=VALUE_LOSS_COEFFICIENT
     )
 
-    model_load_path = os.path.join(MODEL_DIR, "dqn_owner_agent.pth")
-    # owner_agent.load_model(model_load_path) # Comment out if starting fresh or if model is causing issues
+    model_load_path = os.path.join(MODEL_DIR, "ppo_owner_agent.pth")
+    owner_agent.load_model(model_load_path)
 
     total_rewards_per_episode = []
     moving_avg_rewards_per_episode = []
-    total_steps_taken = 0
-    current_learning_rate = LEARNING_RATE
-    print("Starting DQN training...")
+    
+    avg_policy_loss_log = []
+    avg_value_loss_log = []
+    avg_entropy_loss_log = []
+
+    total_env_steps = 0 # Tracks owner steps for PPO update
+
+    print("Starting PPO training...")
 
     with tqdm(range(NUM_EPISODES), unit="episode") as episode_pbar:
         for episode in episode_pbar:
@@ -230,12 +256,14 @@ def train_agent():
                 player_vision_radius=PLAYER_VISION_RADIUS,
                 owner_vision_radius=OWNER_VISION_RADIUS,
                 generator_params=game_params)
-            player_action_queue = deque() # Queue for player actions
+            player_action_queue = deque() 
+            player_knows_exit_pos = None 
+            last_player_direction = None  
             log_file_handle = None
-            current_log_filename = None # To store the filename if logging occurs
+            current_log_filename = None
             
             if (episode + 1) % LOGGING_FREQUENCY == 0:
-                current_log_filename = os.path.join(LOGS_DIR, f"episode_trace_ep{episode+1}.txt")
+                current_log_filename = os.path.join(LOGS_DIR, f"ppo_episode_trace_ep{episode+1}.txt") 
                 log_file_handle = open(current_log_filename, "w")
 
             def do_log(message):
@@ -244,19 +272,15 @@ def train_agent():
 
             do_log(f"--- Episode {episode + 1} Initial State ---\n")
             do_log(game.render_grid_to_string(player_pov=False) + "\n\n")
-            # game.print_grid_with_entities(player_pov=False) # Original console print
 
-            player_knows_exit_pos = None
-            last_player_direction = None
             precomputed_static_map_np = precompute_static_map_representation(game, GRID_HEIGHT, GRID_WIDTH)
-            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
+            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np) # Shape (C, H, W)
+            
             episode_reward = 0
-            game_turn_count = 0 
+            game_turn_count = 0 # Owner turns in current episode
             episode_wall_bumps = 0
 
-            # Determine current phase and effective rewards
             is_phase_1 = episode < PHASE_2_START_EPISODE
-
             effective_reward_catch_player = 0 if is_phase_1 else REWARD_CATCH_PLAYER
             effective_reward_player_escapes = 0 if is_phase_1 else REWARD_PLAYER_ESCAPES
             effective_reward_proximity = 0 if is_phase_1 else REWARD_PROXIMITY
@@ -264,7 +288,11 @@ def train_agent():
             effective_reward_per_step = REWARD_PER_STEP if is_phase_1 else 0
             
             # --- GAME LOOP ---
-            while not game.game_over and game_turn_count < MAX_TURNS_PER_EPISODE:
+            # Loop for a maximum number of total game steps or owner turns
+            for _ in range(MAX_TURNS_PER_EPISODE * (PLAYER_MOVES_PER_TURN + 1)): 
+                if game.game_over or game_turn_count >= MAX_TURNS_PER_EPISODE:
+                    break
+
                 current_entity = game.get_current_turn_entity()
                 player_action_count_in_turn = game.player_moves_taken_this_turn + 1
 
@@ -276,20 +304,20 @@ def train_agent():
                     
                     player_vision, _ = game.get_player_vision_data()
                     owner_seen_at = None
-                    for loc, entity_type_in_vision in player_vision.items():
-                        if entity_type_in_vision == "OWNER":
+                    for loc, entity_types_in_vision in player_vision.items(): 
+                        if "OWNER" in entity_types_in_vision:
                             owner_seen_at = loc
                             break
                     
-                    if game.exit_pos and game.exit_pos in player_vision and player_vision[game.exit_pos] == HotelGenerator.EXIT:
-                        player_knows_exit_pos = game.exit_pos 
+                    if game.exit_pos and game.exit_pos in player_vision and HotelGenerator.EXIT in player_vision[game.exit_pos]:
+                         player_knows_exit_pos = game.exit_pos
 
                     # --- FLEEING LOGIC ---
                     if owner_seen_at:
-                        # if episode < 5 and game.player_moves_taken_this_turn == 0: print(f"Ep {episode}: Player at ({player_r},{player_c}) FLEEING owner at {owner_seen_at}")
-                        player_action_queue.clear() # Clear any planned path
+                        player_action_queue.clear() 
                         flee_actions_with_dist = []
                         for action_key, (dr, dc) in Game.ACTION_DELTAS.items():
+                            if action_key == Game.WAIT and len(flee_actions_with_dist) > 0 : continue 
                             next_r, next_c = player_r + dr, player_c + dc
                             if game._is_walkable(next_r, next_c, "PLAYER"):
                                 dist_to_owner = math.sqrt((next_r - owner_seen_at[0])**2 + (next_c - owner_seen_at[1])**2)
@@ -297,93 +325,79 @@ def train_agent():
                         if flee_actions_with_dist:
                             flee_actions_with_dist.sort(key=lambda x: x['dist'], reverse=True) 
                             if flee_actions_with_dist: chosen_player_action = flee_actions_with_dist[0]['action']
-
                     # --- ACTION QUEUE LOGIC ---
                     elif player_action_queue:
                         action_from_queue = player_action_queue.popleft()
-                        # Validate the queued action
                         q_dr, q_dc = Game.ACTION_DELTAS[action_from_queue]
                         q_next_r, q_next_c = player_r + q_dr, player_c + q_dc
 
                         if game._is_walkable(q_next_r, q_next_c, "PLAYER"):
-                            # Further check: if pathing to known exit, ensure move is consistent
                             q_next_tile_type = game._get_tile(q_next_r, q_next_c)
                             is_consistent_hallway_move = not player_knows_exit_pos or \
                                                         (q_next_tile_type == HotelGenerator.HALLWAY or \
                                                          q_next_tile_type == HotelGenerator.DOOR or \
-                                                         (q_next_r, q_next_c) == player_knows_exit_pos)
+                                                         (q_next_r, q_next_c) == player_knows_exit_pos) 
                             
                             if is_consistent_hallway_move:
                                 chosen_player_action = action_from_queue
                                 do_log(f"Player using action '{chosen_player_action}' from queue. {len(player_action_queue)} actions remaining.\n")
                             else:
                                 do_log(f"Queued action '{action_from_queue}' leads to inconsistent tile '{q_next_tile_type}' for known exit path. Clearing queue.\n")
-                                player_action_queue.clear() # chosen_player_action remains Game.WAIT
+                                player_action_queue.clear() 
                         else:
                             do_log(f"Queued action '{action_from_queue}' is no longer walkable. Clearing queue.\n")
-                            player_action_queue.clear() # chosen_player_action remains Game.WAIT
+                            player_action_queue.clear() 
 
                     # --- EXIT LOGIC ---
-                    elif player_knows_exit_pos is not None and game.exit_pos is not None:
-                        global_target_exit_pos = player_knows_exit_pos
+                    elif player_knows_exit_pos is not None and game.exit_pos is not None: 
+                        global_target_exit_pos = player_knows_exit_pos 
                         current_room_obj = game.get_room_player_is_in(player_r, player_c)
                         
-                        # 1. If in a room, try to move towards the door to exit to a hallway.
                         if current_room_obj and current_player_tile_type == HotelGenerator.ROOM_FLOOR:
                             room_door = game.get_door_for_room(current_room_obj)
-                            
                             if room_door:
                                 target_door_pos_on_grid = room_door['door_pos']
-                                # if episode < 5 and game.player_moves_taken_this_turn == 0: print(f"Ep {episode}: Best door is {target_door_pos_on_grid}, connected_hallway {best_door_to_use['connected_hallway']}")
-                                
                                 actions_to_door = []
                                 for action_key, (dr, dc) in Game.ACTION_DELTAS.items():
                                     next_r, next_c = player_r + dr, player_c + dc
-                                    # Check if the move is within the current room or to the target door, and is walkable
                                     if game.is_pos_in_room_or_door(next_r, next_c, current_room_obj, target_door_pos_on_grid) and \
-                                       game._is_walkable(next_r, next_c, "PLAYER"):
+                                       game._is_walkable(next_r, next_c, "PLAYER"): 
                                         dist_to_door = math.sqrt((next_r - target_door_pos_on_grid[0])**2 + (next_c - target_door_pos_on_grid[1])**2)
                                         actions_to_door.append({'action': action_key, 'dist': dist_to_door, 'next_pos':(next_r,next_c)})
-                                
-                                actions_to_door.sort(key=lambda x: x['dist'])
-                                min_d = actions_to_door[0]['dist']
-                                # Prefer moves that actually change position if multiple options have same min distance
-                                best_options = [opt for opt in actions_to_door if opt['dist'] == min_d]
-                                # To avoid getting stuck, prefer non-WAIT if possible
-                                non_wait_best_options = [opt for opt in best_options if opt['action'] != Game.WAIT]
-                                if non_wait_best_options:
-                                    chosen_player_action = random.choice(non_wait_best_options)['action']
-                                elif best_options: # Only WAIT or no non-WAIT options at min_dist
-                                    chosen_player_action = best_options[0]['action'] # Could be WAIT
-                            # No door found, fallback to exploring the room
-                            else:
-                                # if episode < 5 and game.player_moves_taken_this_turn == 0: print(f"Ep {episode}: Could not find a best door. Exploring in room.")
+                                if actions_to_door: 
+                                    actions_to_door.sort(key=lambda x: x['dist'])
+                                    min_d = actions_to_door[0]['dist']
+                                    best_options = [opt for opt in actions_to_door if opt['dist'] == min_d]
+                                    non_wait_best_options = [opt for opt in best_options if opt['action'] != Game.WAIT]
+                                    if non_wait_best_options:
+                                        chosen_player_action = random.choice(non_wait_best_options)['action']
+                                    elif best_options: 
+                                        chosen_player_action = best_options[0]['action'] 
+                            else: 
                                 valid_room_moves = [] 
                                 for p_act_key, (dr_p, dc_p) in Game.ACTION_DELTAS.items():
                                     next_r_p, next_c_p = player_r + dr_p, player_c + dc_p
                                     if game.is_pos_in_room_or_door(next_r_p, next_c_p, current_room_obj, None) and \
-                                       game._is_walkable(next_r_p, next_c_p, "PLAYER"): # Check if move stays in room and is walkable
+                                       game._is_walkable(next_r_p, next_c_p, "PLAYER"): 
                                         valid_room_moves.append(p_act_key)
-                                if Game.WAIT not in valid_room_moves: valid_room_moves.append(Game.WAIT) # Ensure WAIT is an option
+                                if Game.WAIT not in valid_room_moves: valid_room_moves.append(Game.WAIT) 
                                 if valid_room_moves: chosen_player_action = random.choice(valid_room_moves)
 
-                        # 2. If in a hallway or at a door, explore the hallway towards the exit.
                         elif current_player_tile_type == HotelGenerator.HALLWAY or \
                              current_player_tile_type == HotelGenerator.DOOR or \
-                             (player_r, player_c) == global_target_exit_pos:
-                            
-                            if (player_r, player_c) == global_target_exit_pos:
-                                # if episode < 5 and game.player_moves_taken_this_turn == 0: print(f"Ep {episode}: Player AT EXIT ({player_r},{player_c}). Waiting for game to end.")
+                             (player_r, player_c) == global_target_exit_pos: 
+
+                            if (player_r, player_c) == global_target_exit_pos: 
                                 chosen_player_action = Game.WAIT 
                             else:                                
                                 path_to_exit = bfs_hallway_pathfinding(game, (player_r, player_c), global_target_exit_pos)
                                 if path_to_exit and len(path_to_exit) > 0:
                                     player_action_queue.extend(path_to_exit)
                                     do_log(f"BFS success. Path: {path_to_exit}. Queue populated with {len(player_action_queue)} actions.\n")
-                                    if player_action_queue: # Should be true
+                                    if player_action_queue: 
                                         chosen_player_action = player_action_queue.popleft()
                                         do_log(f"Player taking first action '{chosen_player_action}' from new BFS path. {len(player_action_queue)} actions remaining.\n")
-                                else: # BFS FAILED or empty path
+                                else: 
                                     do_log(f"BFS FAILED or empty path to {global_target_exit_pos}. Fallback hallway movement.\n")
                                     fallback_options = []
                                     for action_key, (dr_fb, dc_fb) in Game.ACTION_DELTAS.items():
@@ -392,18 +406,15 @@ def train_agent():
                                             tile_type_fallback_target = game._get_tile(next_r_fb, next_c_fb)
                                             if tile_type_fallback_target == HotelGenerator.HALLWAY or \
                                                tile_type_fallback_target == HotelGenerator.DOOR or \
-                                               (next_r_fb, next_c_fb) == global_target_exit_pos:
+                                               (next_r_fb, next_c_fb) == global_target_exit_pos: 
                                                 fallback_options.append(action_key)
                                     if fallback_options:
                                         non_wait_options = [a for a in fallback_options if a != Game.WAIT]
                                         if non_wait_options: chosen_player_action = random.choice(non_wait_options)
-                                        elif Game.WAIT in fallback_options: chosen_player_action = Game.WAIT
+                                        elif Game.WAIT in fallback_options: chosen_player_action = Game.WAIT 
                                         else: chosen_player_action = Game.WAIT 
-                                    else: chosen_player_action = Game.WAIT
-                        
-                        # 3. If not in a room or hallway, explore the grid using any valid moves.
+                                    else: chosen_player_action = Game.WAIT 
                         else: 
-                            # if episode < 5 and game.player_moves_taken_this_turn == 0: print(f"Ep {episode}: Player at ({player_r},{player_c}) knows exit {global_target_exit_pos}, but not in Room/Hallway/Door (e.g. Hiding Spot). General approach.")
                             actions_to_target = []
                             for action_key, (dr, dc) in Game.ACTION_DELTAS.items():
                                 next_r, next_c = player_r + dr, player_c + dc
@@ -413,17 +424,14 @@ def train_agent():
                             if actions_to_target:
                                 actions_to_target.sort(key=lambda x: x['dist'])
                                 chosen_player_action = actions_to_target[0]['action']
-                            else: chosen_player_action = Game.WAIT
-
+                            else: chosen_player_action = Game.WAIT 
                     # --- EXPLORATION LOGIC ---
                     else: 
-                        # 1. If in a room, try to move towards a random door to exit to a hallway.
                         current_room_obj = game.get_room_player_is_in(player_r, player_c)
                         if current_player_tile_type == HotelGenerator.ROOM_FLOOR and current_room_obj:
                             room_door = game.get_door_for_room(current_room_obj)
                             if room_door:
                                 target_door_pos_on_grid = room_door['door_pos']
-                                
                                 actions_to_door = []
                                 for action_key, (dr, dc) in Game.ACTION_DELTAS.items():
                                     next_r, next_c = player_r + dr, player_c + dc
@@ -431,8 +439,7 @@ def train_agent():
                                        game._is_walkable(next_r, next_c, "PLAYER"):
                                         dist_to_door = math.sqrt((next_r - target_door_pos_on_grid[0])**2 + (next_c - target_door_pos_on_grid[1])**2)
                                         actions_to_door.append({'action': action_key, 'dist': dist_to_door})
-                                
-                                if actions_to_door:
+                                if actions_to_door: 
                                     actions_to_door.sort(key=lambda x: x['dist'])
                                     min_d = actions_to_door[0]['dist']
                                     best_options = [opt for opt in actions_to_door if opt['dist'] == min_d]
@@ -440,13 +447,10 @@ def train_agent():
                                     if non_wait_best_options:
                                         chosen_player_action = random.choice(non_wait_best_options)['action']
                                     elif best_options: 
-                                        chosen_player_action = best_options[0]['action']
-                        
-                        # 2. If in a hallway or at a door, explore the hallway using persistent direction.
+                                        chosen_player_action = best_options[0]['action'] 
                         elif current_player_tile_type == HotelGenerator.HALLWAY or \
                              current_player_tile_type == HotelGenerator.DOOR:
                             action_chosen_for_hallway = False
-                            # Try to continue in the last_player_direction
                             if last_player_direction and last_player_direction != Game.WAIT:
                                 dr_last, dc_last = Game.ACTION_DELTAS[last_player_direction]
                                 next_r_last, next_c_last = player_r + dr_last, player_c + dc_last
@@ -457,12 +461,10 @@ def train_agent():
                                         chosen_player_action = last_player_direction
                                         action_chosen_for_hallway = True
                             
-                            if not action_chosen_for_hallway:
-                                # If cannot continue, or no last_player_direction, pick a new random valid direction (not WAIT)
+                            if not action_chosen_for_hallway: 
                                 possible_new_directions = []
                                 action_options = [Game.MOVE_NORTH, Game.MOVE_SOUTH, Game.MOVE_EAST, Game.MOVE_WEST]
-                                random.shuffle(action_options) # Shuffle to pick a random new direction
-
+                                random.shuffle(action_options) 
                                 for action_key_hallway in action_options:
                                     dr_new, dc_new = Game.ACTION_DELTAS[action_key_hallway]
                                     next_r_new, next_c_new = player_r + dr_new, player_c + dc_new
@@ -471,76 +473,70 @@ def train_agent():
                                         next_tile_type_new = game._get_tile(next_r_new, next_c_new)
                                         if next_tile_type_new == HotelGenerator.HALLWAY or next_tile_type_new == HotelGenerator.DOOR:
                                             possible_new_directions.append(action_key_hallway)
-                                
                                 if possible_new_directions:
                                     chosen_player_action = random.choice(possible_new_directions)
-                        
-                        # 3. Fallback: If exploring but not in a room or hallway (e.g., hiding spot, other unexpected tile)
-                        else:
+                        else: 
                             valid_fallback_moves = []
                             action_options_fallback = [Game.MOVE_NORTH, Game.MOVE_SOUTH, Game.MOVE_EAST, Game.MOVE_WEST]
                             random.shuffle(action_options_fallback)
-
                             for p_act_key_fallback in action_options_fallback:
                                 next_r_fb, next_c_fb = player_r + Game.ACTION_DELTAS[p_act_key_fallback][0], player_c + Game.ACTION_DELTAS[p_act_key_fallback][1]
                                 if game._is_walkable(next_r_fb, next_c_fb, "PLAYER"):
                                     valid_fallback_moves.append(p_act_key_fallback)
-                            
                             if valid_fallback_moves:
                                 chosen_player_action = random.choice(valid_fallback_moves)
-                    
-                    # --- End of Player Action Decision ---
                     
                     do_log(f"--- Owner Turn {game_turn_count + 1}, Player Action {player_action_count_in_turn}/{game.player_moves_per_turn} ---\n")
                     do_log(f"Player at ({player_r},{player_c}), Tile: {current_player_tile_type}, Knows Exit: {player_knows_exit_pos}, Owner Seen: {owner_seen_at}\n")
                     do_log(f"Player intends to: {chosen_player_action}\n")
                     
-                    # Store player's position before the action to check if they actually moved
                     player_pos_before_action = game.player_pos 
-                    
-                    game.handle_player_turn(chosen_player_action) # Player takes action
-                    
-                    # Update last_player_direction based on the outcome of the action
+                    game.handle_player_turn(chosen_player_action) 
+
                     if game.player_pos is not None and player_pos_before_action is not None:
                         if game.player_pos != player_pos_before_action and chosen_player_action != Game.WAIT:
-                            # Player successfully moved to a new tile
                             last_player_direction = chosen_player_action
-                        elif game.player_pos == player_pos_before_action and chosen_player_action != Game.WAIT:
-                            # Player intended to move but didn't (e.g., bumped a wall, invalid move)
-                            # Reset last_player_direction so it tries a new one next time if exploring hallways.
-                            last_player_direction = None
-                        # If chosen_player_action was Game.WAIT, last_player_direction remains unchanged.
-                    elif game.player_pos is None: # Should not happen if game is ongoing
+                        elif game.player_pos == player_pos_before_action and chosen_player_action != Game.WAIT: 
+                            last_player_direction = None 
+                    elif game.player_pos is None: 
                         last_player_direction = None
                     
                     do_log(game.render_grid_to_string(player_pov=False) + "\n")
                     log_player_pos_after_move = game.player_pos
                     log_player_tile_after_move = 'N/A'
-                    if log_player_pos_after_move: # Check if player_pos is not None
+                    if log_player_pos_after_move: 
                         log_player_tile_after_move = game._get_tile(log_player_pos_after_move[0], log_player_pos_after_move[1])
                     do_log(f"Player actual position after move: {log_player_pos_after_move}, Tile: {log_player_tile_after_move}\n\n")
 
-                    current_player_tile_after_move = game._get_tile(game.player_pos[0], game.player_pos[1]) if game.player_pos else None
-                    current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np) 
+                    # Update owner state tensor if player moved, as player position is part of owner's state
+                    if game.game_over: # If player's move ends the game (e.g. player escapes)
+                        current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
+                    else: # Game continues, update state for owner's turn if it's next
+                        if game.get_current_turn_entity() == "OWNER":
+                             current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
+
 
                 elif current_entity == "OWNER":
                     do_log(f"--- Owner Turn {game_turn_count + 1} (Owner's Move) ---\n")
-                    chosen_owner_action = owner_agent.choose_action(current_owner_state_tensor.unsqueeze(0))
+                    
+                    # PPO choose_action expects state (1, C, H, W). current_owner_state_tensor is (C,H,W)
+                    chosen_owner_action, action_log_prob, state_value = owner_agent.choose_action(current_owner_state_tensor.unsqueeze(0))
 
-                    prev_owner_state_tensor_for_replay = current_owner_state_tensor 
+                    prev_owner_state_tensor_for_ppo = current_owner_state_tensor 
                     
                     moved_successfully = game.handle_owner_turn(chosen_owner_action)
+                    total_env_steps += 1 
                     
                     do_log(game.render_grid_to_string(player_pov=False) + "\n")
                     log_owner_pos_after_move = game.owner_pos
                     log_owner_tile_after_move = 'N/A'
-                    if log_owner_pos_after_move: # Check if owner_pos is not None
+                    if log_owner_pos_after_move: 
                         log_owner_tile_after_move = game._get_tile(log_owner_pos_after_move[0], log_owner_pos_after_move[1])
+                    do_log(f"Owner intends to: {chosen_owner_action}\n")
                     do_log(f"Owner actual position after move: {log_owner_pos_after_move}, Tile: {log_owner_tile_after_move}\n\n")
                     
                     next_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
                     
-                    # Calculate step-based reward: 0 by default, penalty if in a room
                     step_reward = effective_reward_base
 
                     if game.owner_pos:
@@ -556,139 +552,218 @@ def train_agent():
                         step_reward += effective_reward_per_step
                     
                     if game.player_pos and game.owner_pos:
-                        # Check for visibility first
                         owner_vision_data = game.get_owner_vision_data()
-                        if game.player_pos in owner_vision_data:
+                        if game.player_pos in owner_vision_data and "PLAYER" in owner_vision_data[game.player_pos]:
                             step_reward += REWARD_PLAYER_VISIBLE
                             do_log(f"Player visible to owner. Adding REWARD_PLAYER_VISIBLE: {REWARD_PLAYER_VISIBLE}\n")
                         
-                        # Then check for proximity (can be independent or in addition to visibility)
                         dist_to_player = math.sqrt((game.player_pos[0] - game.owner_pos[0])**2 + (game.player_pos[1] - game.owner_pos[1])**2)
                         if dist_to_player <= PROXIMITY_THRESHOLD:
                             normalized_distance = dist_to_player / PROXIMITY_THRESHOLD
-                            step_reward += effective_reward_proximity * (1 - normalized_distance)
+                            proximity_reward_value = effective_reward_proximity * (1 - normalized_distance)
+                            step_reward += proximity_reward_value
                             if effective_reward_proximity != 0:
-                                do_log(f"Owner close to player. Adding proximity reward: {effective_reward_proximity * (1 - normalized_distance):.2f}\n")
+                                do_log(f"Owner close to player. Adding proximity reward: {proximity_reward_value:.2f}\n")
                     
-                    # Determine if the episode is truly done and adjust terminal rewards
-                    is_done_for_buffer = game.game_over # Set by catch/escape via handle_owner_turn
+                    is_done_for_ppo = game.game_over 
 
-                    if game.game_over: # Game ended by catch or escape this turn
+                    if game.game_over: 
                         if game.winner == "OWNER":
                             step_reward += effective_reward_catch_player
                             do_log(f"OWNER WINS! Adding effective_reward_catch_player: {effective_reward_catch_player}\n")
-                        else: # Player escaped
+                        elif game.winner == "PLAYER": 
                             step_reward += effective_reward_player_escapes
-                            do_log(f"PLAYER ESCAPES! Adding effective_reward_player_escapes: {effective_reward_player_escapes}\n")
-                    elif (game_turn_count + 1) >= MAX_TURNS_PER_EPISODE: # Game ends by timeout this turn
-                        is_done_for_buffer = True
-                        step_reward += effective_reward_player_escapes # Timeout is a loss for the owner
-                        game.game_over = True # Ensure game state reflects this for loop termination and logging
-                        game.winner = "PLAYER" # Or a specific "TIMEOUT" status
-                        do_log(f"Max turns reached. Assigning effective_reward_player_escapes: {effective_reward_player_escapes}. Current step_reward before this: {step_reward - REWARD_PLAYER_ESCAPES}\n")
+                            do_log(f"PLAYER ESCAPES (during owner's turn processing)! Adding effective_reward_player_escapes: {effective_reward_player_escapes}\n")
+
+                    elif (game_turn_count + 1) >= MAX_TURNS_PER_EPISODE: 
+                        is_done_for_ppo = True 
+                        step_reward += effective_reward_player_escapes 
+                        game.game_over = True 
+                        game.winner = "PLAYER" 
+                        do_log(f"Max turns reached for owner. Assigning effective_reward_player_escapes: {effective_reward_player_escapes}.\n")
                     
                     do_log(f"Owner received reward for this turn: {step_reward}\n")
                     episode_reward += step_reward
                     
-                    owner_agent.store_transition(prev_owner_state_tensor_for_replay, 
+                    actual_next_state_for_ppo = next_owner_state_tensor if not is_done_for_ppo else None
+                    owner_agent.store_transition(prev_owner_state_tensor_for_ppo, 
                                                  chosen_owner_action, 
-                                                 step_reward, # Use the potentially modified step_reward
-                                                 next_owner_state_tensor, 
-                                                 is_done_for_buffer) # Use the corrected done flag
+                                                 action_log_prob,
+                                                 state_value.squeeze(), # Ensure state_value is scalar or (1,)
+                                                 step_reward, 
+                                                 actual_next_state_for_ppo,
+                                                 is_done_for_ppo) 
                     
                     current_owner_state_tensor = next_owner_state_tensor 
-                    game_turn_count += 1
-                    total_steps_taken += 1
+                    game_turn_count += 1 
 
-                if game.game_over:
-                    do_log(f"--- GAME OVER ---\n")
+                    # PPO Learning Step
+                    if total_env_steps % UPDATE_TIMESTEPS == 0 and total_env_steps > 0:
+                        if len(owner_agent.memory["states"]) >= owner_agent.mini_batch_size: # Ensure enough samples for at least one batch
+                            do_log(f"--- PPO Learning Update at step {total_env_steps} with {len(owner_agent.memory['states'])} transitions ---\n")
+                            p_loss, v_loss, e_loss = owner_agent.learn() # learn() clears memory
+                            avg_policy_loss_log.append(p_loss)
+                            avg_value_loss_log.append(v_loss)
+                            avg_entropy_loss_log.append(e_loss)
+                            do_log(f"PPO Update Complete. Policy Loss: {p_loss:.4f}, Value Loss: {v_loss:.4f}, Entropy: {e_loss:.4f}\n")
+                        else:
+                            do_log(f"Skipping PPO Learning Update at step {total_env_steps}: not enough samples ({len(owner_agent.memory['states'])} < {owner_agent.mini_batch_size})\n")
+                
+                if game.game_over: # Check if game ended after player or owner turn
+                    do_log(f"--- GAME OVER (Episode {episode + 1}) ---\n")
                     do_log(f"Winner: {game.winner}\n")
                     do_log(game.render_grid_to_string(player_pov=False) + "\n\n")
+                    # This break is for the inner for-loop managing turns
                     break 
-                
-                if total_steps_taken > LEARN_START_STEPS and total_steps_taken % LEARN_EVERY_N_STEPS == 0:
-                    owner_agent.learn()
             
+            # End of episode handling (after for loop or game_over break)
             if not game.game_over and game_turn_count >= MAX_TURNS_PER_EPISODE:
-                do_log(f"--- MAX TURNS ({MAX_TURNS_PER_EPISODE}) REACHED ---\n")
-                do_log(game.render_grid_to_string(player_pov=False) + "\n\n")
+                do_log(f"--- MAX TURNS ({MAX_TURNS_PER_EPISODE}) REACHED (Episode {episode + 1}) ---\n")
+                do_log(f"Game outcome treated as Player Escape for reward purposes if not already game_over.\n")
+                # If game didn't end by catch, and max turns hit, it's like player escaped from owner's perspective
+                # This reward is already handled if is_done_for_ppo was set due to max turns.
+                # This block is mostly for logging consistency.
+                if game.winner is None: game.winner = "PLAYER" # Ensure winner is set
 
-            if game.game_over and game.winner == "PLAYER" and game_turn_count < MAX_TURNS_PER_EPISODE:
-                episode_reward += effective_reward_player_escapes
+            # Final reward adjustments or logging for the episode
+            # Note: REWARD_PLAYER_ESCAPES is added to step_reward when game ends by timeout or player escape.
+            # No need for the specific DQN-style adjustment:
+            # if game.game_over and game.winner == "PLAYER" and game_turn_count < MAX_TURNS_PER_EPISODE:
+            #     episode_reward += effective_reward_player_escapes
 
-            do_log(f"Episode Reward: {episode_reward}\n")
-            do_log(f"Episode Wall Bumps: {episode_wall_bumps}\n")
-            if log_file_handle: # Close the file if it was opened for this episode
+            do_log(f"Episode {episode + 1} Reward: {episode_reward}\n")
+            do_log(f"Episode {episode + 1} Wall Bumps: {episode_wall_bumps}\n")
+            if log_file_handle: 
                 log_file_handle.close()
-                log_file_handle = None # Good practice to reset
+                log_file_handle = None 
 
-            owner_agent.decay_exploration()
+            # PPO does not use epsilon decay in this manner
+            # owner_agent.decay_exploration() 
             total_rewards_per_episode.append(episode_reward)
 
             if (episode + 1) % LEARNING_RATE_DECAY_FREQUENCY == 0 and current_learning_rate > MIN_LEARNING_RATE:
                 current_learning_rate *= LEARNING_RATE_DECAY_FACTOR
-                current_learning_rate = max(current_learning_rate, MIN_LEARNING_RATE) # Ensure it doesn't go below min
+                current_learning_rate = max(current_learning_rate, MIN_LEARNING_RATE) 
                 for param_group in owner_agent.optimizer.param_groups:
                     param_group['lr'] = current_learning_rate
+                do_log(f"Decayed learning rate to {current_learning_rate} at episode {episode + 1}\n")
 
-            # Calculate moving average
+
             if len(total_rewards_per_episode) >= MA_WINDOW:
                 current_ma = np.mean(total_rewards_per_episode[-MA_WINDOW:])
                 moving_avg_rewards_per_episode.append(current_ma)
             else:
-                # Append NaN or the mean of available data if window not full yet
-                # Using NaN ensures the MA line starts only when enough data is present
                 moving_avg_rewards_per_episode.append(np.nan)
 
             postfix_stats = {
                 "Phase": "1 (Nav)" if is_phase_1 else "2 (Chase)",
-                "Epsilon": f"{owner_agent.epsilon:.4f}",
                 "LR": f"{current_learning_rate:.6f}",
-                "Steps": total_steps_taken,
+                "Steps": total_env_steps,
             }
+            if avg_policy_loss_log: # Add recent losses if available
+                postfix_stats["P_Loss"] = f"{avg_policy_loss_log[-1]:.3f}"
+                postfix_stats["V_Loss"] = f"{avg_value_loss_log[-1]:.3f}"
+
             if len(total_rewards_per_episode) >= MA_WINDOW:
-                avg_reward = np.mean(total_rewards_per_episode[-MA_WINDOW:])
-                postfix_stats[f"Avg Rwd ({MA_WINDOW}-Ep)"] = f"{avg_reward:.2f}"
+                avg_reward = moving_avg_rewards_per_episode[-1] # Use the already calculated MA
+                if not np.isnan(avg_reward):
+                    postfix_stats[f"Avg Rwd ({MA_WINDOW}-Ep)"] = f"{avg_reward:.2f}"
             elif total_rewards_per_episode:
                 avg_reward = np.mean(total_rewards_per_episode)
                 postfix_stats[f"Avg Rwd (All)"] = f"{avg_reward:.2f}"
             episode_pbar.set_postfix(postfix_stats)
 
             if (episode + 1) % PLOTTING_FREQUENCY == 0:
-                periodic_model_save_path = os.path.join(MODEL_DIR, f"dqn_owner_agent_ep{episode+1}.pth")
+                periodic_model_save_path = os.path.join(MODEL_DIR, f"ppo_owner_agent_ep{episode+1}.pth")
                 owner_agent.save_model(periodic_model_save_path)
                 
-                periodic_plot_filename = os.path.join(PLOTS_DIR, f"dqn_rewards_ep{episode+1}.png")
-                plt.figure(figsize=(10,5))
-                plt.plot(total_rewards_per_episode, label='Episode Reward')
-                plt.plot(moving_avg_rewards_per_episode, label=f'{MA_WINDOW}-Ep Moving Average', linestyle='--')
+                fig, ax1 = plt.subplots(figsize=(12, 7))
                 
+                # Plot Rewards
+                color = 'tab:blue'
+                ax1.set_xlabel("Episode")
+                ax1.set_ylabel("Total Reward for Owner", color=color)
+                ax1.plot(total_rewards_per_episode, label='Episode Reward', color=color, alpha=0.6)
+                ax1.plot(moving_avg_rewards_per_episode, label=f'{MA_WINDOW}-Ep Moving Average', linestyle='-', color='darkblue', linewidth=2)
+                ax1.tick_params(axis='y', labelcolor=color)
+                ax1.grid(True, axis='y', linestyle=':', alpha=0.7)
+
                 if 1 < PHASE_2_START_EPISODE <= (episode + 1):
-                    plt.axvline(x=PHASE_2_START_EPISODE - 1, color='g', linestyle='--', label=f'Phase 2 Start (Ep {PHASE_2_START_EPISODE})')
+                    ax1.axvline(x=PHASE_2_START_EPISODE - 1, color='g', linestyle='--', label=f'Phase 2 Start (Ep {PHASE_2_START_EPISODE})')
                 
-                plt.title(f"DQN Owner's Rewards up to Episode {episode+1}")
-                plt.xlabel("Episode")
-                plt.ylabel("Total Reward for Owner")
-                plt.legend()
-                plt.grid(True)
-                plt.savefig(periodic_plot_filename)
+                # Plot PPO Losses on a secondary y-axis
+                if avg_policy_loss_log: # Check if there's loss data to plot
+                    ax2 = ax1.twinx() # instantiate a second axes that shares the same x-axis
+                    color_p = 'tab:red'
+                    color_v = 'tab:green'
+                    # We need to align loss plots with episodes where learning happened.
+                    # Learning happens every UPDATE_TIMESTEPS, not every episode.
+                    # For simplicity, we plot the sequence of losses.
+                    # A more accurate plot would map losses to the episode number *after* which the learning step occurred.
+                    # However, for a general trend, plotting the list of losses is indicative.
+                    loss_indices = np.linspace(0, episode + 1, len(avg_policy_loss_log)) # Approximate mapping to episodes
+
+                    ax2.set_ylabel('Avg Losses (PPO)', color=color_p) 
+                    ax2.plot(loss_indices, avg_policy_loss_log, label='Avg Policy Loss', color=color_p, linestyle=':', alpha=0.7)
+                    ax2.plot(loss_indices, avg_value_loss_log, label='Avg Value Loss', color=color_v, linestyle=':', alpha=0.7)
+                    # ax2.plot(loss_indices, avg_entropy_loss_log, label='Avg Entropy', color='tab:purple', linestyle=':', alpha=0.7) # Optional
+                    ax2.tick_params(axis='y', labelcolor=color_p)
+                
+                fig.tight_layout() # otherwise the right y-label is slightly clipped
+                plt.title(f"PPO Owner's Rewards & Losses up to Episode {episode+1}")
+                
+                # Combine legends
+                lines, labels = ax1.get_legend_handles_labels()
+                if avg_policy_loss_log:
+                    lines2, labels2 = ax2.get_legend_handles_labels()
+                    ax2.legend(lines + lines2, labels + labels2, loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3)
+                else:
+                    ax1.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3)
+
+                periodic_plot_filename = os.path.join(PLOTS_DIR, f"ppo_rewards_losses_ep{episode+1}.png")
+                plt.savefig(periodic_plot_filename, bbox_inches='tight')
                 plt.close() 
 
-    print("\n--- DQN TRAINING COMPLETE ---")
-    final_model_save_path = os.path.join(MODEL_DIR, "dqn_owner_agent_final.pth")
+    print("\n--- PPO TRAINING COMPLETE ---")
+    final_model_save_path = os.path.join(MODEL_DIR, "ppo_owner_agent_final.pth")
     owner_agent.save_model(final_model_save_path)
-    print(f"Final DQN model saved as {final_model_save_path}")
+    print(f"Final PPO model saved as {final_model_save_path}")
 
-    final_plot_filename = os.path.join(PLOTS_DIR, "dqn_final_rewards_plot.png")
-    plt.figure(figsize=(10,5))
-    plt.plot(total_rewards_per_episode)
-    plt.title("DQN Owner's Rewards per Episode (Full Training)")
-    plt.xlabel("Episode")
-    plt.ylabel("Total Reward for Owner")
-    plt.grid(True)
-    plt.savefig(final_plot_filename)
-    print(f"Final DQN rewards plot saved as {final_plot_filename}")
-    # plt.show() 
+    # Final Plot
+    fig, ax1 = plt.subplots(figsize=(12, 7))
+    color = 'tab:blue'
+    ax1.set_xlabel("Episode")
+    ax1.set_ylabel("Total Reward for Owner", color=color)
+    ax1.plot(total_rewards_per_episode, label='Episode Reward', color=color, alpha=0.6)
+    ax1.plot(moving_avg_rewards_per_episode, label=f'{MA_WINDOW}-Ep Moving Average', linestyle='-', color='darkblue', linewidth=2)
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid(True, axis='y', linestyle=':', alpha=0.7)
+    if 1 < PHASE_2_START_EPISODE <= NUM_EPISODES:
+        ax1.axvline(x=PHASE_2_START_EPISODE - 1, color='g', linestyle='--', label=f'Phase 2 Start (Ep {PHASE_2_START_EPISODE})')
+
+    if avg_policy_loss_log:
+        ax2 = ax1.twinx()
+        color_p = 'tab:red'
+        color_v = 'tab:green'
+        loss_indices = np.linspace(0, NUM_EPISODES, len(avg_policy_loss_log))
+        ax2.set_ylabel('Avg Losses (PPO)', color=color_p)
+        ax2.plot(loss_indices, avg_policy_loss_log, label='Avg Policy Loss', color=color_p, linestyle=':', alpha=0.7)
+        ax2.plot(loss_indices, avg_value_loss_log, label='Avg Value Loss', color=color_v, linestyle=':', alpha=0.7)
+        ax2.tick_params(axis='y', labelcolor=color_p)
+    
+    fig.tight_layout()
+    plt.title("PPO Owner's Rewards & Losses per Episode (Full Training)")
+    lines, labels = ax1.get_legend_handles_labels()
+    if avg_policy_loss_log:
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax2.legend(lines + lines2, labels + labels2, loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3)
+    else:
+        ax1.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3)
+    
+    final_plot_filename = os.path.join(PLOTS_DIR, "ppo_final_rewards_losses_plot.png")
+    plt.savefig(final_plot_filename, bbox_inches='tight')
+    print(f"Final PPO rewards & losses plot saved as {final_plot_filename}")
+    plt.close()
     print(f"Periodic episode traces logged to '{LOGS_DIR}' directory.")
 
 
