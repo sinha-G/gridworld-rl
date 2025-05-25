@@ -9,6 +9,19 @@ class Game:
     MOVE_WEST = "MOVE_WEST"
     WAIT = "WAIT"
 
+    NORTH_DIR = (-1, 0)
+    SOUTH_DIR = (1, 0)
+    EAST_DIR = (0, 1)
+    WEST_DIR = (0, -1)
+
+    ACTION_TO_DIRECTION_VECTOR = {
+        MOVE_NORTH: NORTH_DIR,
+        MOVE_SOUTH: SOUTH_DIR,
+        MOVE_EAST: EAST_DIR,
+        MOVE_WEST: WEST_DIR,
+        # WAIT does not have a direction vector / does not change current direction
+    }
+
     ACTION_DELTAS = {
         MOVE_NORTH: (-1, 0),
         MOVE_SOUTH: (1, 0),
@@ -30,14 +43,16 @@ class Game:
 
         self.player_moves_per_turn = player_moves_per_turn
         self.player_moves_taken_this_turn = 0
-
+        self.player_direction_vector = self.NORTH_DIR # Reset direction on new game
+        self.player_cone_angle_degrees = 90
         self.player_vision_radius = player_vision_radius
+        self.player_hiding_vision_radius = 1
         self.owner_vision_radius = owner_vision_radius
-        self.player_hiding_vision_radius = max(1, player_vision_radius // 2)
 
         self.game_over = False
         self.winner = None 
-        self.sound_alerts = [] 
+        self.sound_alerts = []
+        
 
         self._initialize_game(generator_params)
 
@@ -68,6 +83,7 @@ class Game:
         self.game_over = False
         self.winner = None
         self.sound_alerts = []
+        self.player_direction_vector = self.NORTH_DIR # Reset direction on new game
 
     def _determine_underlying_tile(self, r, c):
         # Check if inside any room's floor area
@@ -214,11 +230,13 @@ class Game:
 
     def _move_entity(self, entity_pos, action_key, entity_type="PLAYER"):
         if action_key == self.WAIT:
-            # For WAIT, position doesn't change, but it's a valid action.
-            # Specific handling for player/owner wait if needed (e.g. consuming a turn)
             if entity_type == "PLAYER": self.player_pos = entity_pos
             else: self.owner_pos = entity_pos
             return True
+
+        # Update player direction if it's a move action, regardless of success
+        if entity_type == "PLAYER" and action_key in self.ACTION_TO_DIRECTION_VECTOR:
+            self.player_direction_vector = self.ACTION_TO_DIRECTION_VECTOR[action_key]
 
         dr, dc = self.ACTION_DELTAS.get(action_key, (0,0))
         current_r, current_c = entity_pos
@@ -230,15 +248,6 @@ class Game:
         if entity_type == "PLAYER":
             return self._handle_player_move(new_r, new_c)
         elif entity_type == "OWNER":
-            # Owner's door logic is more nuanced:
-            # If owner is on a door, they can only move to an adjacent non-door.
-            # If owner is not on a door, they can move to an adjacent door (1st step) or other walkable.
-            owner_on_door = self._get_tile(current_r, current_c) == HotelGenerator.DOOR
-            target_is_door = self._get_tile(new_r, new_c) == HotelGenerator.DOOR
-
-            if owner_on_door and target_is_door: # Trying to move from door to door (invalid)
-                return False
-            
             return self._handle_owner_move(new_r, new_c)
         return False
 
@@ -260,7 +269,6 @@ class Game:
 
     def _get_visible_tiles(self, center_r, center_c, radius, entity_type="PLAYER"):
         visible = set()
-        # Corrected iteration for circle
         for r_offset in range(-radius, radius + 1):
             for c_offset in range(-radius, radius + 1):
                 if r_offset**2 + c_offset**2 <= radius**2:
@@ -289,7 +297,7 @@ class Game:
             # Check current point (r,c) if it's not the start point
             if not (r == r0 and c == c0): # Don't check the start point itself for being a wall
                  tile = self._get_tile(r,c)
-                 if tile == HotelGenerator.WALL:
+                 if tile == HotelGenerator.WALL or tile == HotelGenerator.DOOR:
                      return False # Obstruction
 
             e2 = 2 * err
@@ -301,16 +309,106 @@ class Game:
                 c += sc
         return True
 
+    def _get_cone_visible_tiles(self, center_r, center_c, radius, p_dir_dr, p_dir_dc, cone_angle_degrees):
+        """Calculates tiles potentially visible in a cone.
+        p_dir_dr, p_dir_dc: Player's current direction vector (e.g., -1, 0 for North).
+        """
+        visible = set()
+        # Player's own tile is always considered part of the base visible set.
+        # LoS to self will always pass.
+        visible.add((center_r, center_c))
+
+        if cone_angle_degrees <= 0: # No vision cone beyond current tile
+            return visible
+        
+        # Optimized path for 90-degree cone
+        if cone_angle_degrees == 90:
+            for r_offset in range(-radius, radius + 1):
+                for c_offset in range(-radius, radius + 1):
+                    if r_offset == 0 and c_offset == 0: # Skip self
+                        continue
+
+                    # Check distance (circular boundary for the cone)
+                    if r_offset**2 + c_offset**2 > radius**2:
+                        continue
+
+                    target_r, target_c = center_r + r_offset, center_c + c_offset
+                    if not self._is_valid_pos(target_r, target_c):
+                        continue
+
+                    in_cone = False
+                    # Player direction (p_dir_dr, p_dir_dc)
+                    # Target relative vector (r_offset, c_offset)
+                    if p_dir_dr == -1 and p_dir_dc == 0: # Facing North
+                        if r_offset < 0 and abs(c_offset) <= -r_offset:
+                            in_cone = True
+                    elif p_dir_dr == 1 and p_dir_dc == 0: # Facing South
+                        if r_offset > 0 and abs(c_offset) <= r_offset:
+                            in_cone = True
+                    elif p_dir_dc == 1 and p_dir_dr == 0: # Facing East
+                        if c_offset > 0 and abs(r_offset) <= c_offset:
+                            in_cone = True
+                    elif p_dir_dc == -1 and p_dir_dr == 0: # Facing West
+                        if c_offset < 0 and abs(r_offset) <= -c_offset:
+                            in_cone = True
+                    
+                    if in_cone:
+                        visible.add((target_r, target_c))
+        
+        # Fallback to generic cone calculation for other angles (or if cone_angle_degrees >= 360)
+        # For cone_angle_degrees >= 360, cos_half_cone_angle will be <= 0, so most tiles pass the angle check.
+        else: 
+            cos_half_cone_angle = math.cos(math.radians(cone_angle_degrees / 2.0))
+
+            for r_offset in range(-radius, radius + 1):
+                for c_offset in range(-radius, radius + 1):
+                    if r_offset == 0 and c_offset == 0: # Skip self
+                        continue
+
+                    if r_offset**2 + c_offset**2 > radius**2: # Circular boundary
+                        continue
+
+                    target_r, target_c = center_r + r_offset, center_c + c_offset
+                    if not self._is_valid_pos(target_r, target_c):
+                        continue
+
+                    # Vector from center to target tile
+                    vec_target_dr, vec_target_dc = r_offset, c_offset
+                    
+                    len_vec_to_target = math.sqrt(vec_target_dr**2 + vec_target_dc**2)
+                    if len_vec_to_target == 0: # Should be caught by (r_offset == 0 and c_offset == 0)
+                        continue
+
+                    # Dot product between player direction vector and vector to target
+                    dot_product = (p_dir_dr * vec_target_dr) + (p_dir_dc * vec_target_dc)
+                    cos_angle_to_target = dot_product / len_vec_to_target
+                    
+                    # Clamp due to potential floating point inaccuracies
+                    cos_angle_to_target = max(-1.0, min(1.0, cos_angle_to_target))
+
+                    if cos_angle_to_target >= cos_half_cone_angle:
+                        visible.add((target_r, target_c))
+        return visible
+
     def get_player_vision_data(self):
+        if not self.player_pos: # Handle case where player_pos might be None
+            return {}, self.sound_alerts
+
         current_player_tile = self._get_tile(self.player_pos[0], self.player_pos[1])
         radius = self.player_hiding_vision_radius if current_player_tile == HotelGenerator.HIDING_SPOT else self.player_vision_radius
         
-        visible_coords = self._get_visible_tiles(self.player_pos[0], self.player_pos[1], radius, "PLAYER")
+        player_dr, player_dc = self.player_direction_vector
+        visible_coords = self._get_cone_visible_tiles(
+            self.player_pos[0], self.player_pos[1],
+            radius,
+            player_dr, player_dc, # Pass direction vector components
+            self.player_cone_angle_degrees
+        )
         
         seen_world = {}
         for r_coord, c_coord in visible_coords:
             if not self._has_clear_los(self.player_pos[0], self.player_pos[1], r_coord, c_coord):
-                continue # Skip if LoS is blocked
+                continue 
 
             tile_on_grid = self.grid[r_coord][c_coord]
             if (r_coord, c_coord) == self.owner_pos:
@@ -318,6 +416,10 @@ class Game:
             else:
                 seen_world[(r_coord, c_coord)] = tile_on_grid
         
+        # Ensure player always sees themselves if they exist
+        if self.player_pos in visible_coords and self._has_clear_los(self.player_pos[0], self.player_pos[1], self.player_pos[0], self.player_pos[1]):
+             seen_world[self.player_pos] = self.grid[self.player_pos[0]][self.player_pos[1]] # Show actual tile player is on
+
         return seen_world, self.sound_alerts
 
     def get_owner_vision_data(self):
@@ -326,8 +428,8 @@ class Game:
         owner_is_on_door = self._get_tile(self.owner_pos[0], self.owner_pos[1]) == HotelGenerator.DOOR
 
         for r_coord, c_coord in visible_coords:
-            if not self._has_clear_los(self.owner_pos[0], self.owner_pos[1], r_coord, c_coord):
-                continue
+            # if not self._has_clear_los(self.owner_pos[0], self.owner_pos[1], r_coord, c_coord):
+            #     continue
 
             # If owner is on a door, their vision into the next area might be restricted.
             # This is a complex LoS problem. For now, if LoS is clear, they see.

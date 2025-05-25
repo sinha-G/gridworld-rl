@@ -15,7 +15,7 @@ class DQNNetwork(nn.Module):
     """
     Convolutional Neural Network for Q-value approximation.
     """
-    def __init__(self, input_channels, height, width, num_actions):
+    def __init__(self, input_channels, height, width, num_actions, dropout_rate=0.2):
         super(DQNNetwork, self).__init__()
         # Convolutional layers
         self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=5, stride=1, padding=2) # Maintains H, W
@@ -33,15 +33,28 @@ class DQNNetwork(nn.Module):
 
         # Fully connected layers
         self.fc1 = nn.Linear(linear_input_size, 256) # Increased hidden units
-        self.fc_out = nn.Linear(256, num_actions)
+        self.dropout = nn.Dropout(dropout_rate) # Added dropout layer
+        
+        # Dueling DQN: Value stream
+        self.fc_value = nn.Linear(256, 1)
+        # Dueling DQN: Advantage stream
+        self.fc_advantage = nn.Linear(256, num_actions)
 
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
         x = x.view(x.size(0), -1) # Flatten the output of conv layers
-        x = F.relu(self.fc1(x))
-        return self.fc_out(x)
+        x_fc1 = F.relu(self.fc1(x))
+        x_fc1_dropped = self.dropout(x_fc1) # Apply dropout
+
+        state_value = self.fc_value(x_fc1)
+        action_advantage = self.fc_advantage(x_fc1)
+
+        # Combine value and advantage streams
+        # Q(s,a) = V(s) + (A(s,a) - mean(A(s,a')))
+        q_values = state_value + (action_advantage - action_advantage.mean(dim=1, keepdim=True))
+        return q_values
 
 
 class DQNAgent:
@@ -87,40 +100,23 @@ class DQNAgent:
         except ValueError:
             return -1 # Should not happen if action is valid
 
-    def choose_action(self, state_tensor, game_instance, valid_game_actions):
+    def choose_action(self, state_tensor):
         """
-        Chooses an action using epsilon-greedy policy.
+        Chooses an action using epsilon-greedy policy from all possible game actions.
         state_tensor: PyTorch tensor (1, C, H, W) representing the current grid state.
-        game_instance: The current game instance (used by QLearningAgent, less so here directly for choosing).
-        valid_game_actions: A list of currently valid game actions (e.g., [Game.MOVE_NORTH, Game.WAIT])
         """
-        if not valid_game_actions: # Should not happen if WAIT is always an option
-            return None # Or a default action if absolutely necessary
-
         if random.random() < self.epsilon:
             # Exploration: Choose a random valid game action
-            return random.choice(valid_game_actions)
+            return random.choice(self.game_actions_list)
         else:
             # Exploitation: Choose the best valid action based on Q-network
             with torch.no_grad():
                 # state_tensor should be (1, C, H, W)
-                q_values_all_actions = self.q_network(state_tensor.to(self.device))[0] # Get Q-values for all actions (batch size 1)
+                q_values_all_actions = self.q_network(state_tensor.to(self.device))[0] 
 
-            best_q_value = -float('inf')
-            chosen_action_constant = random.choice(valid_game_actions) # Default to a random valid action
-
-            # Iterate through valid_game_actions, find their indices, and get their Q-values
-            found_better_action = False
-            for game_action_constant in valid_game_actions:
-                action_idx = self.get_action_index(game_action_constant)
-                if action_idx != -1: # Ensure the action is in our list
-                    current_q = q_values_all_actions[action_idx].item()
-                    if current_q > best_q_value:
-                        best_q_value = current_q
-                        chosen_action_constant = game_action_constant
-                        found_better_action = True
-            
-            return chosen_action_constant
+            # Find the action_index corresponding to the max Q-value
+            best_action_idx = torch.argmax(q_values_all_actions).item()
+            return self.game_actions_list[best_action_idx]
 
     def store_transition(self, state_tensor, action_constant, reward, next_state_tensor, done):
         """
@@ -190,7 +186,7 @@ class DQNAgent:
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_value_(self.q_network.parameters(), 100) # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0) # Gradient clipping
         self.optimizer.step()
 
         self.learn_step_counter += 1
@@ -211,7 +207,7 @@ class DQNAgent:
             os.makedirs(dir_name, exist_ok=True)
             
         torch.save(self.q_network.state_dict(), filepath)
-        print(f"DQN model saved to {filepath}")
+        # print(f"DQN model saved to {filepath}")
 
     def load_model(self, filepath="dqn_model.pth"):
         """Loads the Q-network's state dictionary."""

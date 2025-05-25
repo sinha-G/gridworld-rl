@@ -13,60 +13,75 @@ from agents.dqn_agent import DQNAgent
 from gridworld_generator import HotelGenerator 
 
 # --- STATE REPRESENTATION FOR DQN ---
-NUM_DQN_CHANNELS = 9 
-SOUND_PERCEPTION_RADIUS = 8
+NUM_DQN_CHANNELS = 8 
+SOUND_PERCEPTION_RADIUS = 1
+PLAYER_VISION_RADIUS = 0
+OWNER_VISION_RADIUS = 3
 
-def get_dqn_state_representation(game_instance, grid_height, grid_width):
+def precompute_static_map_representation(game_instance, grid_height, grid_width):
     """
-    Creates a multi-channel tensor representation of the game state for the DQN.
+    Creates a multi-channel numpy array representation of the static game map elements.
+    Populates channels 2-7: Walls, Doors, Hallways, Room Floors, Hiding Spots, Exit.
     Output shape: (NUM_DQN_CHANNELS, grid_height, grid_width)
     """
-    state_tensor_np = np.zeros((NUM_DQN_CHANNELS, grid_height, grid_width), dtype=np.float32)
+    static_state_tensor_np = np.zeros((NUM_DQN_CHANNELS, grid_height, grid_width), dtype=np.float32)
+
+    for r_idx in range(grid_height):
+        for c_idx in range(grid_width):
+            tile = game_instance.grid[r_idx][c_idx]
+            if tile == HotelGenerator.WALL:
+                static_state_tensor_np[2, r_idx, c_idx] = 1.0
+            elif tile == HotelGenerator.DOOR:
+                static_state_tensor_np[3, r_idx, c_idx] = 1.0
+            elif tile == HotelGenerator.HALLWAY:
+                static_state_tensor_np[4, r_idx, c_idx] = 1.0
+            elif tile == HotelGenerator.ROOM_FLOOR:
+                static_state_tensor_np[5, r_idx, c_idx] = 1.0
+            elif tile == HotelGenerator.HIDING_SPOT:
+                static_state_tensor_np[6, r_idx, c_idx] = 1.0
+
+    # Channel 7: Exit Position
+    if game_instance.exit_pos:
+        r_e, c_e = game_instance.exit_pos
+        if 0 <= r_e < grid_height and 0 <= c_e < grid_width:
+            static_state_tensor_np[7, r_e, c_e] = 1.0
+    return static_state_tensor_np
+
+def get_dqn_state_representation(game_instance, grid_height, grid_width, static_map_representation_np):
+    """
+    Creates a multi-channel tensor representation of the game state for the DQN,
+    using a precomputed static map representation and adding dynamic elements.
+    Output shape: (NUM_DQN_CHANNELS, grid_height, grid_width)
+    """
+    # Start with a copy of the precomputed static map features
+    state_tensor_np = static_map_representation_np.copy()
+
+    # Clear dynamic channels (0, 1, 8) in the copy before populating them
+    state_tensor_np[0, :, :] = 0.0  # Owner's Position channel
+    state_tensor_np[1, :, :] = 0.0  # Player's Position channel
+    # state_tensor_np[8, :, :] = 0.0  # Sounds channel
 
     # Channel 0: Owner's Position
     if game_instance.owner_pos:
-        orow, ocol = game_instance.owner_pos
-        if 0 <= orow < grid_height and 0 <= ocol < grid_width:
-            state_tensor_np[0, orow, ocol] = 1.0
+        r_o, c_o = game_instance.owner_pos
+        if 0 <= r_o < grid_height and 0 <= c_o < grid_width:
+            state_tensor_np[0, r_o, c_o] = 1.0
 
     # Channel 1: Player's Position (Visible to Owner)
-    owner_vision = game_instance.get_owner_vision_data() 
+    owner_vision = game_instance.get_owner_vision_data()
     if game_instance.player_pos:
-        prow, pcol = game_instance.player_pos
-        if (prow, pcol) in owner_vision and owner_vision[(prow, pcol)] == "PLAYER":
-             if 0 <= prow < grid_height and 0 <= pcol < grid_width:
-                state_tensor_np[1, prow, pcol] = 1.0
-    
-    # Iterate through the grid for static elements
-    for r_idx in range(grid_height): # Renamed r to r_idx to avoid conflict
-        for c_idx in range(grid_width): # Renamed c to c_idx
-            tile = game_instance.grid[r_idx][c_idx]
-            # Channel 2: Walls
-            if tile == HotelGenerator.WALL:
-                state_tensor_np[2, r_idx, c_idx] = 1.0
-            # Channel 3: Doors
-            elif tile == HotelGenerator.DOOR:
-                state_tensor_np[3, r_idx, c_idx] = 1.0
-            # Channel 4: Hallways
-            elif tile == HotelGenerator.HALLWAY:
-                state_tensor_np[4, r_idx, c_idx] = 1.0
-            # Channel 5: Room Floors
-            elif tile == HotelGenerator.ROOM_FLOOR:
-                state_tensor_np[5, r_idx, c_idx] = 1.0
-            # Channel 6: Hiding Spots
-            elif tile == HotelGenerator.HIDING_SPOT:
-                state_tensor_np[6, r_idx, c_idx] = 1.0
-            # Channel 7: Exit Position
-            if game_instance.exit_pos and r_idx == game_instance.exit_pos[0] and c_idx == game_instance.exit_pos[1]:
-                 state_tensor_np[7, r_idx, c_idx] = 1.0
+        r_p, c_p = game_instance.player_pos
+        if (r_p, c_p) in owner_vision: # Check if player is in owner's vision
+            if 0 <= r_p < grid_height and 0 <= c_p < grid_width:
+                state_tensor_np[1, r_p, c_p] = 1.0
 
     # Channel 8: Sounds (from game_instance.sound_alerts)
-    for sound_event in game_instance.sound_alerts:
-        if 'DOOR' in sound_event['type'].upper(): 
-            srow, scol = sound_event['pos']
-            orow, ocol = game_instance.owner_pos
-            if (srow - orow)**2 + (scol - ocol)**2 <= SOUND_PERCEPTION_RADIUS ** 2 and 0 <= srow < grid_height and 0 <= scol < grid_width:
-                state_tensor_np[8, srow, scol] = 1.0
+    # for sound_event in game_instance.sound_alerts:
+    #     if 'DOOR' in sound_event['type'].upper(): 
+    #         srow, scol = sound_event['pos']
+    #         orow, ocol = game_instance.owner_pos
+    #         if (srow - orow)**2 + (scol - ocol)**2 <= SOUND_PERCEPTION_RADIUS ** 2 and game_instance._is_valid_pos(srow, scol):
+    #             state_tensor_np[8, srow, scol] = 1.0
                  
     return torch.from_numpy(state_tensor_np)
 
@@ -128,50 +143,57 @@ def train_agent():
     MODEL_DIR = "models"
     PLOTS_DIR = "plots"
     LOGS_DIR = "logs"
-    LOGGING_FREQUENCY = 20
+    LOGGING_FREQUENCY = 500
     PLOTTING_FREQUENCY = 500
+    MA_WINDOW = 100
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
     os.makedirs(LOGS_DIR, exist_ok=True)
     # --- END DIRECTORY SETUP ---
 
     # Game parameters
-    GRID_HEIGHT = 25
-    GRID_WIDTH = 30
-    PLAYER_MOVES_PER_TURN = 2
+    GRID_HEIGHT = 10
+    GRID_WIDTH = 10
+    PLAYER_MOVES_PER_TURN = 1
 
     game_params = {
         'straightness_hallways': 0.9,
-        'hall_loops': 5,
-        'max_hallway_perc': 0.25,
-        'max_rooms': 25,
+        'hall_loops': 0,
+        'max_hallway_perc': 0.05,
+        'max_rooms': 0,
         'room_min_size': 2,
-        'room_max_size': 4,
+        'room_max_size': 3,
         'max_hiding_spots_per_room': 1,
     }
 
-    # DQN Agent parameters
+    # Training parameters
     NUM_EPISODES = 10000
-    MAX_TURNS_PER_EPISODE = 200
-    LEARNING_RATE = 0.0005
-    DISCOUNT_FACTOR = 0.99
+    MAX_TURNS_PER_EPISODE = 40
+    LEARNING_RATE = 0.0008
+    DISCOUNT_FACTOR = 0.95
     EXPLORATION_RATE_INITIAL = 1.0
-    EXPLORATION_DECAY_RATE = 0.9999
-    MIN_EXPLORATION_RATE = 0.05
+    EXPLORATION_DECAY_RATE = 0.9997
+    MIN_EXPLORATION_RATE = 0.01
     REPLAY_BUFFER_SIZE = 50000
-    BATCH_SIZE = 256
+    BATCH_SIZE = 512
     TARGET_UPDATE_FREQUENCY = 1000
-    LEARN_START_STEPS = 2500
+    LEARN_START_STEPS = 5000
     LEARN_EVERY_N_STEPS = 4
-    PROXIMITY_THRESHOLD = 7
+    PROXIMITY_THRESHOLD = 3
+    LEARNING_RATE_DECAY_FACTOR = 0.95
+    LEARNING_RATE_DECAY_FREQUENCY = 250
+    MIN_LEARNING_RATE = 0.00001
+    PHASE_2_START_EPISODE = 3000
 
     # Rewards
-    REWARD_CATCH_PLAYER = 100
-    REWARD_PLAYER_ESCAPES = -100
-    REWARD_BUMP_WALL = -10
-    REWARD_IN_ROOM = -5
-    REWARD_PROXIMITY_MAX = 50 
-    # REWARD_PROXIMITY_STEALTH_BONUS = 10
+    REWARD_CATCH_PLAYER = 150
+    REWARD_PLAYER_ESCAPES = -50
+    REWARD_BUMP_WALL = -3
+    REWARD_IN_ROOM = 0
+    REWARD_PROXIMITY = 10
+    REWARD_PLAYER_VISIBLE = 0
+    REWARD_BASE = -0.5
+    REWARD_PER_STEP = 2
 
     game_actions_list = [Game.MOVE_NORTH, Game.MOVE_SOUTH, Game.MOVE_EAST, Game.MOVE_WEST, Game.WAIT]
 
@@ -194,12 +216,20 @@ def train_agent():
     # owner_agent.load_model(model_load_path) # Comment out if starting fresh or if model is causing issues
 
     total_rewards_per_episode = []
+    moving_avg_rewards_per_episode = []
     total_steps_taken = 0
+    current_learning_rate = LEARNING_RATE
     print("Starting DQN training...")
 
     with tqdm(range(NUM_EPISODES), unit="episode") as episode_pbar:
         for episode in episode_pbar:
-            game = Game(width=GRID_WIDTH, height=GRID_HEIGHT, player_moves_per_turn=PLAYER_MOVES_PER_TURN, generator_params=game_params)
+            game = Game(
+                width=GRID_WIDTH, 
+                height=GRID_HEIGHT, 
+                player_moves_per_turn=PLAYER_MOVES_PER_TURN, 
+                player_vision_radius=PLAYER_VISION_RADIUS,
+                owner_vision_radius=OWNER_VISION_RADIUS,
+                generator_params=game_params)
             player_action_queue = deque() # Queue for player actions
             log_file_handle = None
             current_log_filename = None # To store the filename if logging occurs
@@ -217,11 +247,23 @@ def train_agent():
             # game.print_grid_with_entities(player_pov=False) # Original console print
 
             player_knows_exit_pos = None
-            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH)
+            last_player_direction = None
+            precomputed_static_map_np = precompute_static_map_representation(game, GRID_HEIGHT, GRID_WIDTH)
+            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
             episode_reward = 0
             game_turn_count = 0 
-            player_recent_hallway_pos = [] 
+            episode_wall_bumps = 0
 
+            # Determine current phase and effective rewards
+            is_phase_1 = episode < PHASE_2_START_EPISODE
+
+            effective_reward_catch_player = 0 if is_phase_1 else REWARD_CATCH_PLAYER
+            effective_reward_player_escapes = 0 if is_phase_1 else REWARD_PLAYER_ESCAPES
+            effective_reward_proximity = 0 if is_phase_1 else REWARD_PROXIMITY
+            effective_reward_base = 0 if is_phase_1 else REWARD_BASE
+            effective_reward_per_step = REWARD_PER_STEP if is_phase_1 else 0
+            
+            # --- GAME LOOP ---
             while not game.game_over and game_turn_count < MAX_TURNS_PER_EPISODE:
                 current_entity = game.get_current_turn_entity()
                 player_action_count_in_turn = game.player_moves_taken_this_turn + 1
@@ -479,26 +521,11 @@ def train_agent():
                     do_log(f"Player actual position after move: {log_player_pos_after_move}, Tile: {log_player_tile_after_move}\n\n")
 
                     current_player_tile_after_move = game._get_tile(game.player_pos[0], game.player_pos[1]) if game.player_pos else None
-                    current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH) 
+                    current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np) 
 
                 elif current_entity == "OWNER":
                     do_log(f"--- Owner Turn {game_turn_count + 1} (Owner's Move) ---\n")
-                    valid_owner_actions = []
-                    for owner_act_key_iter in game_actions_list: 
-                        if owner_act_key_iter == Game.WAIT:
-                            valid_owner_actions.append(owner_act_key_iter)
-                            continue
-                        dr_o, dc_o = Game.ACTION_DELTAS[owner_act_key_iter]
-                        if game.owner_pos: 
-                            next_r_o, next_c_o = game.owner_pos[0] + dr_o, game.owner_pos[1] + dc_o
-                            if game._is_walkable(next_r_o, next_c_o, "OWNER"):
-                                valid_owner_actions.append(owner_act_key_iter)
-                    if not valid_owner_actions and game.owner_pos : valid_owner_actions.append(Game.WAIT)
-                    elif not game.owner_pos: 
-                        valid_owner_actions.append(Game.WAIT)
-
-                    chosen_owner_action = owner_agent.choose_action(current_owner_state_tensor.unsqueeze(0), game, valid_owner_actions)
-                    do_log(f"Owner at {game.owner_pos} intends to: {chosen_owner_action}\n")
+                    chosen_owner_action = owner_agent.choose_action(current_owner_state_tensor.unsqueeze(0))
 
                     prev_owner_state_tensor_for_replay = current_owner_state_tensor 
                     
@@ -511,32 +538,63 @@ def train_agent():
                         log_owner_tile_after_move = game._get_tile(log_owner_pos_after_move[0], log_owner_pos_after_move[1])
                     do_log(f"Owner actual position after move: {log_owner_pos_after_move}, Tile: {log_owner_tile_after_move}\n\n")
                     
-                    next_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH)
+                    next_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
                     
                     # Calculate step-based reward: 0 by default, penalty if in a room
-                    reward = 0
+                    step_reward = effective_reward_base
 
                     if game.owner_pos:
                         owner_r_after_move, owner_c_after_move = game.owner_pos
                         owner_tile_type_after_move = game._get_tile(owner_r_after_move, owner_c_after_move)
                         if owner_tile_type_after_move == HotelGenerator.ROOM_FLOOR:
-                            reward += REWARD_IN_ROOM
-
-                    if game.game_over:
-                        reward += REWARD_CATCH_PLAYER if game.winner == "OWNER" else REWARD_PLAYER_ESCAPES
+                            step_reward += REWARD_IN_ROOM
                     
-                    if not moved_successfully and chosen_owner_action != Game.WAIT : 
-                        reward += REWARD_BUMP_WALL
+                    if not moved_successfully and chosen_owner_action != Game.WAIT: 
+                        step_reward += REWARD_BUMP_WALL
+                        episode_wall_bumps += 1
+                    else:
+                        step_reward += effective_reward_per_step
                     
                     if game.player_pos and game.owner_pos:
+                        # Check for visibility first
+                        owner_vision_data = game.get_owner_vision_data()
+                        if game.player_pos in owner_vision_data:
+                            step_reward += REWARD_PLAYER_VISIBLE
+                            do_log(f"Player visible to owner. Adding REWARD_PLAYER_VISIBLE: {REWARD_PLAYER_VISIBLE}\n")
+                        
+                        # Then check for proximity (can be independent or in addition to visibility)
                         dist_to_player = math.sqrt((game.player_pos[0] - game.owner_pos[0])**2 + (game.player_pos[1] - game.owner_pos[1])**2)
-                        if 0.5 < dist_to_player <= PROXIMITY_THRESHOLD: # 0.5 to avoid division by zero
-                            reward += REWARD_PROXIMITY_MAX / dist_to_player
+                        if dist_to_player <= PROXIMITY_THRESHOLD:
+                            normalized_distance = dist_to_player / PROXIMITY_THRESHOLD
+                            step_reward += effective_reward_proximity * (1 - normalized_distance)
+                            if effective_reward_proximity != 0:
+                                do_log(f"Owner close to player. Adding proximity reward: {effective_reward_proximity * (1 - normalized_distance):.2f}\n")
                     
-                    do_log(f"Owner received reward for this turn: {reward}\n") # Added reward logging
-                    episode_reward += reward
+                    # Determine if the episode is truly done and adjust terminal rewards
+                    is_done_for_buffer = game.game_over # Set by catch/escape via handle_owner_turn
+
+                    if game.game_over: # Game ended by catch or escape this turn
+                        if game.winner == "OWNER":
+                            step_reward += effective_reward_catch_player
+                            do_log(f"OWNER WINS! Adding effective_reward_catch_player: {effective_reward_catch_player}\n")
+                        else: # Player escaped
+                            step_reward += effective_reward_player_escapes
+                            do_log(f"PLAYER ESCAPES! Adding effective_reward_player_escapes: {effective_reward_player_escapes}\n")
+                    elif (game_turn_count + 1) >= MAX_TURNS_PER_EPISODE: # Game ends by timeout this turn
+                        is_done_for_buffer = True
+                        step_reward += effective_reward_player_escapes # Timeout is a loss for the owner
+                        game.game_over = True # Ensure game state reflects this for loop termination and logging
+                        game.winner = "PLAYER" # Or a specific "TIMEOUT" status
+                        do_log(f"Max turns reached. Assigning effective_reward_player_escapes: {effective_reward_player_escapes}. Current step_reward before this: {step_reward - REWARD_PLAYER_ESCAPES}\n")
                     
-                    owner_agent.store_transition(prev_owner_state_tensor_for_replay, chosen_owner_action, reward, next_owner_state_tensor, game.game_over)
+                    do_log(f"Owner received reward for this turn: {step_reward}\n")
+                    episode_reward += step_reward
+                    
+                    owner_agent.store_transition(prev_owner_state_tensor_for_replay, 
+                                                 chosen_owner_action, 
+                                                 step_reward, # Use the potentially modified step_reward
+                                                 next_owner_state_tensor, 
+                                                 is_done_for_buffer) # Use the corrected done flag
                     
                     current_owner_state_tensor = next_owner_state_tensor 
                     game_turn_count += 1
@@ -555,6 +613,11 @@ def train_agent():
                 do_log(f"--- MAX TURNS ({MAX_TURNS_PER_EPISODE}) REACHED ---\n")
                 do_log(game.render_grid_to_string(player_pov=False) + "\n\n")
 
+            if game.game_over and game.winner == "PLAYER" and game_turn_count < MAX_TURNS_PER_EPISODE:
+                episode_reward += effective_reward_player_escapes
+
+            do_log(f"Episode Reward: {episode_reward}\n")
+            do_log(f"Episode Wall Bumps: {episode_wall_bumps}\n")
             if log_file_handle: # Close the file if it was opened for this episode
                 log_file_handle.close()
                 log_file_handle = None # Good practice to reset
@@ -562,14 +625,30 @@ def train_agent():
             owner_agent.decay_exploration()
             total_rewards_per_episode.append(episode_reward)
 
+            if (episode + 1) % LEARNING_RATE_DECAY_FREQUENCY == 0 and current_learning_rate > MIN_LEARNING_RATE:
+                current_learning_rate *= LEARNING_RATE_DECAY_FACTOR
+                current_learning_rate = max(current_learning_rate, MIN_LEARNING_RATE) # Ensure it doesn't go below min
+                for param_group in owner_agent.optimizer.param_groups:
+                    param_group['lr'] = current_learning_rate
+
+            # Calculate moving average
+            if len(total_rewards_per_episode) >= MA_WINDOW:
+                current_ma = np.mean(total_rewards_per_episode[-MA_WINDOW:])
+                moving_avg_rewards_per_episode.append(current_ma)
+            else:
+                # Append NaN or the mean of available data if window not full yet
+                # Using NaN ensures the MA line starts only when enough data is present
+                moving_avg_rewards_per_episode.append(np.nan)
+
             postfix_stats = {
+                "Phase": "1 (Nav)" if is_phase_1 else "2 (Chase)",
                 "Epsilon": f"{owner_agent.epsilon:.4f}",
+                "LR": f"{current_learning_rate:.6f}",
                 "Steps": total_steps_taken,
-                "Ep Reward": f"{episode_reward:.2f}"
             }
-            if len(total_rewards_per_episode) >= PLOTTING_FREQUENCY:
-                avg_reward = np.mean(total_rewards_per_episode[-PLOTTING_FREQUENCY:])
-                postfix_stats[f"Avg Rwd ({PLOTTING_FREQUENCY})"] = f"{avg_reward:.2f}"
+            if len(total_rewards_per_episode) >= MA_WINDOW:
+                avg_reward = np.mean(total_rewards_per_episode[-MA_WINDOW:])
+                postfix_stats[f"Avg Rwd ({MA_WINDOW}-Ep)"] = f"{avg_reward:.2f}"
             elif total_rewards_per_episode:
                 avg_reward = np.mean(total_rewards_per_episode)
                 postfix_stats[f"Avg Rwd (All)"] = f"{avg_reward:.2f}"
@@ -581,10 +660,16 @@ def train_agent():
                 
                 periodic_plot_filename = os.path.join(PLOTS_DIR, f"dqn_rewards_ep{episode+1}.png")
                 plt.figure(figsize=(10,5))
-                plt.plot(total_rewards_per_episode)
+                plt.plot(total_rewards_per_episode, label='Episode Reward')
+                plt.plot(moving_avg_rewards_per_episode, label=f'{MA_WINDOW}-Ep Moving Average', linestyle='--')
+                
+                if 1 < PHASE_2_START_EPISODE <= (episode + 1):
+                    plt.axvline(x=PHASE_2_START_EPISODE - 1, color='g', linestyle='--', label=f'Phase 2 Start (Ep {PHASE_2_START_EPISODE})')
+                
                 plt.title(f"DQN Owner's Rewards up to Episode {episode+1}")
                 plt.xlabel("Episode")
                 plt.ylabel("Total Reward for Owner")
+                plt.legend()
                 plt.grid(True)
                 plt.savefig(periodic_plot_filename)
                 plt.close() 
@@ -640,7 +725,8 @@ def test_trained_agent(model_filename="dqn_owner_agent_final.pth"):
     game = Game(width=GRID_WIDTH, height=GRID_HEIGHT, player_moves_per_turn=PLAYER_MOVES_PER_TURN, generator_params=game_params)
     game_turn_count = 0 # Counts owner turns
     
-    current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH)
+    precomputed_static_map_np = precompute_static_map_representation(game, GRID_HEIGHT, GRID_WIDTH)
+    current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
 
     while not game.game_over and game_turn_count < MAX_TURNS_PER_EPISODE:
         print(f"\n--- Game Turn {game_turn_count + 1} ---")
@@ -657,7 +743,7 @@ def test_trained_agent(model_filename="dqn_owner_agent_final.pth"):
             else: 
                 print("Invalid action. Player waits.")
                 game.handle_player_turn(Game.WAIT)
-            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH) 
+            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np) 
         
         elif current_entity == "OWNER":
             print("Owner (trained DQN) is thinking...")
@@ -678,7 +764,7 @@ def test_trained_agent(model_filename="dqn_owner_agent_final.pth"):
             owner_action = trained_agent.choose_action(current_owner_state_tensor.unsqueeze(0), game, valid_owner_actions)
             print(f"Owner chose: {owner_action}")
             game.handle_owner_turn(owner_action)
-            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH)
+            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
             game_turn_count += 1
         
         if current_entity == "OWNER" or game.get_current_turn_entity() == "OWNER": # Show grid after owner or if player's turn ended

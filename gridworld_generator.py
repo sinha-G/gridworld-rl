@@ -15,8 +15,6 @@ class HotelGenerator:
     DIRECTIONS = [(-1, 0), (0, 1), (1, 0), (0, -1)]
 
     def __init__(self, width, height):
-        if width < 20 or height < 20: # Min size for reasonable generation
-            raise ValueError("Width and height must be at least 20.")
         self.width = width
         self.height = height
         self.grid = []
@@ -462,13 +460,13 @@ class HotelGenerator:
         valid_rooms_for_spawn = [r for r in self.rooms if r.get('has_door')]
 
         if len(valid_rooms_for_spawn) == 0:
-            print("Warning: No valid rooms to spawn characters. Attempting hallway spawn.")
+            # print("Warning: No valid rooms to spawn characters. Attempting hallway spawn.")
             self._spawn_character_in_hallway(self.PLAYER)
             self._spawn_character_in_hallway(self.OWNER)
             return
         
         if len(valid_rooms_for_spawn) == 1:
-            print("Warning: Only one valid room. Player and Owner will spawn in the same room if possible, or hallway.")
+            # print("Warning: Only one valid room. Player and Owner will spawn in the same room if possible, or hallway.")
             room_choice = valid_rooms_for_spawn[0]
             spawn_tiles = self._get_placeable_tiles_in_room(room_choice)
             random.shuffle(spawn_tiles)
@@ -491,7 +489,7 @@ class HotelGenerator:
             pr, pc = random.choice(player_spawn_tiles)
             self.grid[pr][pc] = self.PLAYER
         else:
-            print(f"Warning: No placeable tiles in Player's chosen room ({player_room['r']},{player_room['c']}). Spawning in hallway.")
+            # print(f"Warning: No placeable tiles in Player's chosen room ({player_room['r']},{player_room['c']}). Spawning in hallway.")
             self._spawn_character_in_hallway(self.PLAYER)
 
         owner_spawn_tiles = self._get_placeable_tiles_in_room(owner_room)
@@ -523,7 +521,7 @@ class HotelGenerator:
         if hallway_tiles:
             sr, sc = random.choice(hallway_tiles)
             self.grid[sr][sc] = char_tile
-            print(f"Placed {char_tile} in hallway at ({sr},{sc}).")
+            # print(f"Placed {char_tile} in hallway at ({sr},{sc}).")
         else:
             print(f"CRITICAL: No hallway tiles available to spawn {char_tile}!")
 
@@ -633,15 +631,15 @@ class HotelGenerator:
 
 # --- Example Usage ---
 if __name__ == '__main__':
-    hotel_gen = HotelGenerator(width=30, height=25) 
+    hotel_gen = HotelGenerator(height=10, width=10) 
     try:
         grid = hotel_gen.generate_hotel(
             straightness_hallways=0.9,   # higher for straigher hallways
-            hall_loops= 4,              # e.g., 24 loops for 40x30 grid
-            max_hallway_perc=0.25,       # proportion of grid to be hallways
-            max_rooms=20,                # number of rooms to place
+            hall_loops=0,                # e.g., 24 loops for 40x30 grid
+            max_hallway_perc=0.05,       # proportion of grid to be hallways
+            max_rooms=0,                 # number of rooms to place
             room_min_size=2,
-            room_max_size=4,
+            room_max_size=3,
             max_hiding_spots_per_room=1
         )
         hotel_gen.print_grid()
