@@ -7,27 +7,21 @@ import numpy as np
 import os
 
 class ActorCriticNetwork(nn.Module):
-    def __init__(self, input_channels, height, width, num_actions, dropout_rate=0.1):
+    def __init__(self, input_channels, height, width, num_actions):
         super(ActorCriticNetwork, self).__init__()
-        # Convolutional layers (can be similar to your DQN network)
-        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=5, stride=1, padding=2)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
-        self.bn3 = nn.BatchNorm2d(64)
+        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=5, stride=2, padding=2)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.conv3 = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
 
-        conv_out_h = height
-        conv_out_w = width
-        linear_input_size = 64 * conv_out_h * conv_out_w
-
-        self.fc_shared = nn.Linear(linear_input_size, 512)
-        # self.dropout = nn.Dropout(dropout_rate)
+        self.fc_shared = nn.LazyLinear(1024)
 
         # Actor head
-        self.actor_fc = nn.Linear(512, num_actions)
+        self.actor_fc = nn.Linear(1024, num_actions)
         # Critic head
-        self.critic_fc = nn.Linear(512, 1)
+        self.critic_fc = nn.Linear(1024, 1)
 
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
@@ -36,7 +30,6 @@ class ActorCriticNetwork(nn.Module):
         x = x.view(x.size(0), -1) # Flatten
         
         x_shared = F.relu(self.fc_shared(x))
-        # x_shared_dropped = self.dropout(x_shared)
 
         action_probs = F.softmax(self.actor_fc(x_shared), dim=-1)
         state_values = self.critic_fc(x_shared)

@@ -12,76 +12,112 @@ from game import Game
 from agents.ppo_agent import PPOAgent 
 from gridworld_generator import HotelGenerator 
 
-# --- STATE REPRESENTATION FOR DQN ---
-NUM_DQN_CHANNELS = 9
-SOUND_PERCEPTION_RADIUS = 5
-PLAYER_VISION_RADIUS = 0
-OWNER_VISION_RADIUS = 3
+# --- STATE REPRESENTATION FOR PPO ---
+NUM_STATE_HISTORY_FRAMES = 3 # T, T-1, T-2
+# Player History: Channels 0 (T), 1 (T-1), 2 (T-2)
+# Owner History: Channels 3 (T), 4 (T-1), 5 (T-2)
+PLAYER_HISTORY_CHANNELS_START = 0
+OWNER_HISTORY_CHANNELS_START = PLAYER_HISTORY_CHANNELS_START + NUM_STATE_HISTORY_FRAMES
+# Static Map:
+# Channel 6: Walls
+# Channel 7: Doors
+# Channel 8: Hallways
+# Channel 9: Room Floors
+# Channel 10: Hiding Spots
+# Channel 11: Exit Position
+STATIC_CHANNELS_START = OWNER_HISTORY_CHANNELS_START + NUM_STATE_HISTORY_FRAMES
+WALL_CHANNEL_OFFSET = 0
+DOOR_CHANNEL_OFFSET = 1
+HALLWAY_CHANNEL_OFFSET = 2
+ROOM_FLOOR_CHANNEL_OFFSET = 3
+HIDING_SPOT_CHANNEL_OFFSET = 4
+EXIT_CHANNEL_OFFSET = 5
+NUM_STATIC_MAP_FEATURES = 6 # Number of unique static features
+# Sounds:
+# Channel 12: Sounds
+SOUND_CHANNEL_OFFSET = STATIC_CHANNELS_START + NUM_STATIC_MAP_FEATURES
+
+NUM_PPO_CHANNELS = SOUND_CHANNEL_OFFSET + 1 # Total channels: 3+3 for history + 6 static + 1 sound = 13
+
+SOUND_PERCEPTION_RADIUS = 8
+PLAYER_VISION_RADIUS = 3
+OWNER_VISION_RADIUS = 7
 
 def precompute_static_map_representation(game_instance, grid_height, grid_width):
     """
     Creates a multi-channel numpy array representation of the static game map elements.
-    Populates channels 2-7: Walls, Doors, Hallways, Room Floors, Hiding Spots, Exit.
-    Output shape: (NUM_DQN_CHANNELS, grid_height, grid_width)
+    Populates channels for Walls, Doors, Hallways, Room Floors, Hiding Spots, Exit.
+    Output shape: (NUM_PPO_CHANNELS, grid_height, grid_width)
     """
-    static_state_tensor_np = np.zeros((NUM_DQN_CHANNELS, grid_height, grid_width), dtype=np.float32)
+    static_state_tensor_np = np.zeros((NUM_PPO_CHANNELS, grid_height, grid_width), dtype=np.float32)
 
     for r_idx in range(grid_height):
         for c_idx in range(grid_width):
             tile = game_instance.grid[r_idx][c_idx]
             if tile == HotelGenerator.WALL:
-                static_state_tensor_np[2, r_idx, c_idx] = 1.0
+                static_state_tensor_np[STATIC_CHANNELS_START + WALL_CHANNEL_OFFSET, r_idx, c_idx] = 1.0
             elif tile == HotelGenerator.DOOR:
-                static_state_tensor_np[3, r_idx, c_idx] = 1.0
+                static_state_tensor_np[STATIC_CHANNELS_START + DOOR_CHANNEL_OFFSET, r_idx, c_idx] = 1.0
             elif tile == HotelGenerator.HALLWAY:
-                static_state_tensor_np[4, r_idx, c_idx] = 1.0
+                static_state_tensor_np[STATIC_CHANNELS_START + HALLWAY_CHANNEL_OFFSET, r_idx, c_idx] = 1.0
             elif tile == HotelGenerator.ROOM_FLOOR:
-                static_state_tensor_np[5, r_idx, c_idx] = 1.0
+                static_state_tensor_np[STATIC_CHANNELS_START + ROOM_FLOOR_CHANNEL_OFFSET, r_idx, c_idx] = 1.0
             elif tile == HotelGenerator.HIDING_SPOT:
-                static_state_tensor_np[6, r_idx, c_idx] = 1.0
+                static_state_tensor_np[STATIC_CHANNELS_START + HIDING_SPOT_CHANNEL_OFFSET, r_idx, c_idx] = 1.0
 
-    # Channel 7: Exit Position
+    # Channel for Exit Position
     if game_instance.exit_pos:
         r_e, c_e = game_instance.exit_pos
         if 0 <= r_e < grid_height and 0 <= c_e < grid_width:
-            static_state_tensor_np[7, r_e, c_e] = 1.0
+            static_state_tensor_np[STATIC_CHANNELS_START + EXIT_CHANNEL_OFFSET, r_e, c_e] = 1.0
     return static_state_tensor_np
 
-def get_dqn_state_representation(game_instance, grid_height, grid_width, static_map_representation_np):
+def get_dqn_state_representation(game_instance, grid_height, grid_width, static_map_representation_np, owner_pos_history, player_pos_history):
     """
-    Creates a multi-channel tensor representation of the game state for the DQN,
-    using a precomputed static map representation and adding dynamic elements.
-    Output shape: (NUM_DQN_CHANNELS, grid_height, grid_width)
+    Creates a multi-channel tensor representation of the game state for the PPO agent,
+    using a precomputed static map representation and adding dynamic elements including history.
+    Output shape: (NUM_PPO_CHANNELS, grid_height, grid_width)
     """
     # Start with a copy of the precomputed static map features
     state_tensor_np = static_map_representation_np.copy()
 
-    # Clear dynamic channels (0, 1, 8) in the copy before populating them
-    state_tensor_np[0, :, :] = 0.0  # Owner's Position channel
-    state_tensor_np[1, :, :] = 0.0  # Player's Position channel
-    # state_tensor_np[8, :, :] = 0.0  # Sounds channel
+    # Clear dynamic channels before populating them
+    for i in range(NUM_STATE_HISTORY_FRAMES):
+        state_tensor_np[PLAYER_HISTORY_CHANNELS_START + i, :, :] = 0.0  # Player history channels
+        state_tensor_np[OWNER_HISTORY_CHANNELS_START + i, :, :] = 0.0  # Owner history channels
+    state_tensor_np[SOUND_CHANNEL_OFFSET, :, :] = 0.0  # Sounds channel
 
-    # Channel 0: Owner's Position
-    if game_instance.owner_pos:
-        r_o, c_o = game_instance.owner_pos
-        if 0 <= r_o < grid_height and 0 <= c_o < grid_width:
-            state_tensor_np[0, r_o, c_o] = 1.0
+    # Player Position History (Channels 0, 1, 2 for T, T-1, T-2)
+    current_player_pos = game_instance.player_pos
+    player_history_to_fill = [current_player_pos] + list(player_pos_history) # player_pos_history is [T-1, T-2]
 
-    # Channel 1: Player's Position (Visible to Owner)
-    owner_vision = game_instance.get_owner_vision_data()
-    if game_instance.player_pos:
-        r_p, c_p = game_instance.player_pos
-        if (r_p, c_p) in owner_vision: # Check if player is in owner's vision
+    for i in range(NUM_STATE_HISTORY_FRAMES):
+        pos = player_history_to_fill[i]
+        if pos:
+            r_p, c_p = pos
+            # For player history, we use actual position, not just if visible to owner.
             if 0 <= r_p < grid_height and 0 <= c_p < grid_width:
-                state_tensor_np[1, r_p, c_p] = 1.0
+                state_tensor_np[PLAYER_HISTORY_CHANNELS_START + i, r_p, c_p] = 1.0
+    
+    # Owner Position History (Channels 3, 4, 5 for T, T-1, T-2)
+    current_owner_pos = game_instance.owner_pos
+    owner_history_to_fill = [current_owner_pos] + list(owner_pos_history) # owner_pos_history is [T-1, T-2]
 
-    # Channel 8: Sounds (from game_instance.sound_alerts)
-    for sound_event in game_instance.sound_alerts:
-        if 'DOOR' in sound_event['type'].upper(): 
-            srow, scol = sound_event['pos']
-            orow, ocol = game_instance.owner_pos
-            if (srow - orow)**2 + (scol - ocol)**2 <= SOUND_PERCEPTION_RADIUS ** 2 and game_instance._is_valid_pos(srow, scol):
-                state_tensor_np[8, srow, scol] = 1.0
+    for i in range(NUM_STATE_HISTORY_FRAMES):
+        pos = owner_history_to_fill[i]
+        if pos:
+            r_o, c_o = pos
+            if 0 <= r_o < grid_height and 0 <= c_o < grid_width:
+                state_tensor_np[OWNER_HISTORY_CHANNELS_START + i, r_o, c_o] = 1.0
+    
+    # Sounds Channel (Channel 12)
+    if game_instance.owner_pos: # Sound perception is relative to owner
+        orow, ocol = game_instance.owner_pos
+        for sound_event in game_instance.sound_alerts:
+            if 'DOOR' in sound_event['type'].upper(): 
+                srow, scol = sound_event['pos']
+                if (srow - orow)**2 + (scol - ocol)**2 <= SOUND_PERCEPTION_RADIUS ** 2 and game_instance._is_valid_pos(srow, scol):
+                    state_tensor_np[SOUND_CHANNEL_OFFSET, srow, scol] = 1.0
                  
     return torch.from_numpy(state_tensor_np)
 
@@ -152,41 +188,42 @@ def train_agent():
     # --- END DIRECTORY SETUP ---
 
     # Game parameters
-    GRID_HEIGHT = 10
-    GRID_WIDTH = 10
+    GRID_HEIGHT = 15
+    GRID_WIDTH = 15
     PLAYER_MOVES_PER_TURN = 1
 
-    game_params = {
+    game_params_phase1 = {
+        'straightness_hallways': 0.9,
+        'hall_loops': 2,
+        'max_hallway_perc': 0.04,
+        'max_rooms': 0,
+        'room_min_size': 2,
+        'room_max_size': 2,
+        'max_hiding_spots_per_room': 0,
+    }
+
+    game_params_phase3 = {
         'straightness_hallways': 0.9,
         'hall_loops': 2,
         'max_hallway_perc': 0.05,
-        'max_rooms': 0,
+        'max_rooms': 1,
         'room_min_size': 2,
         'room_max_size': 3,
-        'max_hiding_spots_per_room': 1,
+        'max_hiding_spots_per_room': 0,
     }
 
-    # # Training parameters for DQN
-    # NUM_EPISODES = 10000
-    # MAX_TURNS_PER_EPISODE = 40
-    # LEARNING_RATE = 0.0008
-    # DISCOUNT_FACTOR = 0.95
-    # EXPLORATION_RATE_INITIAL = 1.0
-    # EXPLORATION_DECAY_RATE = 0.9997
-    # MIN_EXPLORATION_RATE = 0.01
-    # REPLAY_BUFFER_SIZE = 50000
-    # BATCH_SIZE = 512
-    # TARGET_UPDATE_FREQUENCY = 1000
-    # LEARN_START_STEPS = 5000
-    # LEARN_EVERY_N_STEPS = 4
-    # PROXIMITY_THRESHOLD = 3
-    # LEARNING_RATE_DECAY_FACTOR = 0.95
-    # LEARNING_RATE_DECAY_FREQUENCY = 250
-    # MIN_LEARNING_RATE = 0.00001
-    # PHASE_2_START_EPISODE = 3000
+    game_params_phase4 = {
+        'straightness_hallways': 0.9,
+        'hall_loops': 2,
+        'max_hallway_perc': 0.09,
+        'max_rooms': 2,
+        'room_min_size': 2,
+        'room_max_size': 3,
+        'max_hiding_spots_per_room': 0,
+    }
 
     # Training parameters for PPO
-    NUM_EPISODES = 10000
+    NUM_EPISODES = 5000
     MAX_TURNS_PER_EPISODE = 100
     LEARNING_RATE = 0.0005
     GAMMA = 0.99 # Discount factor for PPO
@@ -198,10 +235,12 @@ def train_agent():
     VALUE_LOSS_COEFFICIENT = 1
     UPDATE_TIMESTEPS = 2048 # Number of owner steps to collect before PPO update
     PHASE_2_START_EPISODE = 1000
+    PHASE_3_START_EPISODE = 2000
+    PHASE_4_START_EPISODE = 4000
 
     # Learning rate decay (can be used with PPO optimizer)
     LEARNING_RATE_DECAY_FACTOR = 0.95
-    LEARNING_RATE_DECAY_FREQUENCY = 250 
+    LEARNING_RATE_DECAY_FREQUENCY = 500 
     MIN_LEARNING_RATE = 0.00001
     current_learning_rate = LEARNING_RATE
 
@@ -209,18 +248,19 @@ def train_agent():
     REWARD_CATCH_PLAYER = 50
     REWARD_PLAYER_ESCAPES = -50
     REWARD_BUMP_WALL = -5
-    REWARD_IN_ROOM = 0 
-    REWARD_PROXIMITY = 25
-    PROXIMITY_THRESHOLD = 5
+    REWARD_IN_ROOM = -2
+    REWARD_PROXIMITY = 30
+    PROXIMITY_THRESHOLD = 6
     REWARD_PLAYER_VISIBLE = 0 
     REWARD_BASE = -0.5 
     REWARD_PER_STEP = 5
+    REWARD_FIRST_DOOR = 30
 
     game_actions_list = [Game.MOVE_NORTH, Game.MOVE_SOUTH, Game.MOVE_EAST, Game.MOVE_WEST, Game.WAIT]
 
     owner_agent = PPOAgent(
         game_actions_list=game_actions_list,
-        input_channels=NUM_DQN_CHANNELS, 
+        input_channels=NUM_PPO_CHANNELS, 
         grid_height=GRID_HEIGHT,
         grid_width=GRID_WIDTH,
         learning_rate=current_learning_rate,
@@ -249,18 +289,25 @@ def train_agent():
 
     with tqdm(range(NUM_EPISODES), unit="episode") as episode_pbar:
         for episode in episode_pbar:
+            is_phase_1 = episode < PHASE_2_START_EPISODE
+            is_phase_3 = episode >= PHASE_3_START_EPISODE and episode < PHASE_4_START_EPISODE
+            is_phase_4 = episode >= PHASE_4_START_EPISODE
+            current_game_params = game_params_phase3 if is_phase_3 else game_params_phase1
             game = Game(
                 width=GRID_WIDTH, 
                 height=GRID_HEIGHT, 
                 player_moves_per_turn=PLAYER_MOVES_PER_TURN, 
-                player_vision_radius=PLAYER_VISION_RADIUS,
+                player_vision_radius=0 if not is_phase_3 else PLAYER_VISION_RADIUS,
                 owner_vision_radius=OWNER_VISION_RADIUS,
-                generator_params=game_params)
+                generator_params=current_game_params)
+            owner_pos_history = deque([game.owner_pos] * NUM_STATE_HISTORY_FRAMES, maxlen=NUM_STATE_HISTORY_FRAMES) 
+            player_pos_history = deque([game.player_pos] * NUM_STATE_HISTORY_FRAMES, maxlen=NUM_STATE_HISTORY_FRAMES)
             player_action_queue = deque() 
             player_knows_exit_pos = None 
             last_player_direction = None  
             log_file_handle = None
             current_log_filename = None
+            first_door_reward_given = False
             
             if (episode + 1) % LOGGING_FREQUENCY == 0:
                 current_log_filename = os.path.join(LOGS_DIR, f"ppo_episode_trace_ep{episode+1}.txt") 
@@ -274,13 +321,12 @@ def train_agent():
             do_log(game.render_grid_to_string(player_pov=False) + "\n\n")
 
             precomputed_static_map_np = precompute_static_map_representation(game, GRID_HEIGHT, GRID_WIDTH)
-            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np) # Shape (C, H, W)
+            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np, owner_pos_history, player_pos_history) # Shape (C, H, W)
             
             episode_reward = 0
             game_turn_count = 0 # Owner turns in current episode
             episode_wall_bumps = 0
 
-            is_phase_1 = episode < PHASE_2_START_EPISODE
             effective_reward_catch_player = 0 if is_phase_1 else REWARD_CATCH_PLAYER
             effective_reward_player_escapes = 0 if is_phase_1 else REWARD_PLAYER_ESCAPES
             effective_reward_proximity = 0 if is_phase_1 else REWARD_PROXIMITY
@@ -494,6 +540,7 @@ def train_agent():
                     game.handle_player_turn(chosen_player_action) 
 
                     if game.player_pos is not None and player_pos_before_action is not None:
+                        player_pos_history.appendleft(player_pos_before_action)
                         if game.player_pos != player_pos_before_action and chosen_player_action != Game.WAIT:
                             last_player_direction = chosen_player_action
                         elif game.player_pos == player_pos_before_action and chosen_player_action != Game.WAIT: 
@@ -508,23 +555,19 @@ def train_agent():
                         log_player_tile_after_move = game._get_tile(log_player_pos_after_move[0], log_player_pos_after_move[1])
                     do_log(f"Player actual position after move: {log_player_pos_after_move}, Tile: {log_player_tile_after_move}\n\n")
 
-                    # Update owner state tensor if player moved, as player position is part of owner's state
-                    if game.game_over: # If player's move ends the game (e.g. player escapes)
-                        current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
-                    else: # Game continues, update state for owner's turn if it's next
-                        if game.get_current_turn_entity() == "OWNER":
-                             current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
-
+                    current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np, owner_pos_history, player_pos_history)
 
                 elif current_entity == "OWNER":
                     do_log(f"--- Owner Turn {game_turn_count + 1} (Owner's Move) ---\n")
                     
                     # PPO choose_action expects state (1, C, H, W). current_owner_state_tensor is (C,H,W)
                     chosen_owner_action, action_log_prob, state_value = owner_agent.choose_action(current_owner_state_tensor.unsqueeze(0))
-
                     prev_owner_state_tensor_for_ppo = current_owner_state_tensor 
+                    owner_pos_before_action = game.owner_pos
                     
                     moved_successfully = game.handle_owner_turn(chosen_owner_action)
+                    
+                    owner_pos_history.appendleft(owner_pos_before_action)
                     total_env_steps += 1 
                     
                     do_log(game.render_grid_to_string(player_pov=False) + "\n")
@@ -535,7 +578,7 @@ def train_agent():
                     do_log(f"Owner intends to: {chosen_owner_action}\n")
                     do_log(f"Owner actual position after move: {log_owner_pos_after_move}, Tile: {log_owner_tile_after_move}\n\n")
                     
-                    next_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
+                    next_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np, owner_pos_history, player_pos_history)
                     
                     step_reward = effective_reward_base
 
@@ -544,6 +587,11 @@ def train_agent():
                         owner_tile_type_after_move = game._get_tile(owner_r_after_move, owner_c_after_move)
                         if owner_tile_type_after_move == HotelGenerator.ROOM_FLOOR:
                             step_reward += REWARD_IN_ROOM
+
+                        if is_phase_4 and not first_door_reward_given and owner_tile_type_after_move == HotelGenerator.DOOR:
+                            step_reward += REWARD_FIRST_DOOR
+                            first_door_reward_given = True 
+                            do_log(f"Owner stepped on a door tile. Adding REWARD_FIRST_DOOR: {REWARD_FIRST_DOOR}\n")
                     
                     if not moved_successfully and chosen_owner_action != Game.WAIT: 
                         step_reward += REWARD_BUMP_WALL
@@ -656,7 +704,7 @@ def train_agent():
                 moving_avg_rewards_per_episode.append(np.nan)
 
             postfix_stats = {
-                "Phase": "1 (Nav)" if is_phase_1 else "2 (Chase)",
+                "Phase": "1" if is_phase_1 else "2" if not is_phase_3 else "3",
                 "LR": f"{current_learning_rate:.6f}",
                 "Steps": total_env_steps,
             }
@@ -690,6 +738,8 @@ def train_agent():
 
                 if 1 < PHASE_2_START_EPISODE <= (episode + 1):
                     ax1.axvline(x=PHASE_2_START_EPISODE - 1, color='g', linestyle='--', label=f'Phase 2 Start (Ep {PHASE_2_START_EPISODE})')
+                if 1 < PHASE_3_START_EPISODE <= (episode + 1):
+                    ax1.axvline(x=PHASE_3_START_EPISODE - 1, color='orange', linestyle='--', label=f'Phase 3 Start (Ep {PHASE_3_START_EPISODE})')
                 
                 # Plot PPO Losses on a secondary y-axis
                 if avg_policy_loss_log: # Check if there's loss data to plot
@@ -740,6 +790,8 @@ def train_agent():
     ax1.grid(True, axis='y', linestyle=':', alpha=0.7)
     if 1 < PHASE_2_START_EPISODE <= NUM_EPISODES:
         ax1.axvline(x=PHASE_2_START_EPISODE - 1, color='g', linestyle='--', label=f'Phase 2 Start (Ep {PHASE_2_START_EPISODE})')
+    if 1 < PHASE_3_START_EPISODE <= NUM_EPISODES:
+        ax1.axvline(x=PHASE_3_START_EPISODE - 1, color='orange', linestyle='--', label=f'Phase 3 Start (Ep {PHASE_3_START_EPISODE})')
 
     if avg_policy_loss_log:
         ax2 = ax1.twinx()
@@ -765,93 +817,6 @@ def train_agent():
     print(f"Final PPO rewards & losses plot saved as {final_plot_filename}")
     plt.close()
     print(f"Periodic episode traces logged to '{LOGS_DIR}' directory.")
-
-
-def test_trained_agent(model_filename="dqn_owner_agent_final.pth"):
-    MODEL_DIR = "models"
-    model_filepath = os.path.join(MODEL_DIR, model_filename)
-
-    print(f"\n--- RUNNING WITH TRAINED DQN AGENT (FROM {model_filepath}) ---")
-    
-    GRID_HEIGHT = 25 
-    GRID_WIDTH = 30
-    PLAYER_MOVES_PER_TURN = 2
-
-    game_params = { 'max_rooms': 8, 'room_min_size': 3, 'room_max_size': 5 } 
-    MAX_TURNS_PER_EPISODE = 400 
-
-    game_actions_list = [Game.MOVE_NORTH, Game.MOVE_SOUTH, Game.MOVE_EAST, Game.MOVE_WEST, Game.WAIT]
-    
-    trained_agent = DQNAgent(
-        game_actions_list=game_actions_list,
-        input_channels=NUM_DQN_CHANNELS,
-        grid_height=GRID_HEIGHT,
-        grid_width=GRID_WIDTH,
-        exploration_rate_initial=0.0, 
-        min_exploration_rate=0.0 
-    )
-    if not os.path.exists(model_filepath):
-        print(f"ERROR: Model file not found at {model_filepath}. Cannot run test.")
-        return
-        
-    trained_agent.load_model(model_filepath)
-    trained_agent.q_network.eval() 
-
-    game = Game(width=GRID_WIDTH, height=GRID_HEIGHT, player_moves_per_turn=PLAYER_MOVES_PER_TURN, generator_params=game_params)
-    game_turn_count = 0 # Counts owner turns
-    
-    precomputed_static_map_np = precompute_static_map_representation(game, GRID_HEIGHT, GRID_WIDTH)
-    current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
-
-    while not game.game_over and game_turn_count < MAX_TURNS_PER_EPISODE:
-        print(f"\n--- Game Turn {game_turn_count + 1} ---")
-        current_entity = game.get_current_turn_entity()
-        
-        if current_entity == "PLAYER":
-            game.print_grid_with_entities(player_pov=True)
-            action_map = {'n': Game.MOVE_NORTH, 's': Game.MOVE_SOUTH, 'e': Game.MOVE_EAST, 'w': Game.MOVE_WEST, 'x': Game.WAIT}
-            usr_input = input("Player action (n,s,e,w,x for wait): ").lower()
-            action = action_map.get(usr_input)
-            
-            if action: 
-                game.handle_player_turn(action)
-            else: 
-                print("Invalid action. Player waits.")
-                game.handle_player_turn(Game.WAIT)
-            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np) 
-        
-        elif current_entity == "OWNER":
-            print("Owner (trained DQN) is thinking...")
-            valid_owner_actions = [] 
-            for owner_act_key in game_actions_list:
-                if owner_act_key == Game.WAIT:
-                    valid_owner_actions.append(owner_act_key)
-                    continue
-                dr_o, dc_o = Game.ACTION_DELTAS[owner_act_key]
-                if game.owner_pos:
-                    next_r_o, next_c_o = game.owner_pos[0] + dr_o, game.owner_pos[1] + dc_o
-                    if game._is_walkable(next_r_o, next_c_o, "OWNER"):
-                        valid_owner_actions.append(owner_act_key)
-            if not valid_owner_actions and game.owner_pos: valid_owner_actions.append(Game.WAIT)
-            elif not game.owner_pos: valid_owner_actions.append(Game.WAIT)
-
-
-            owner_action = trained_agent.choose_action(current_owner_state_tensor.unsqueeze(0), game, valid_owner_actions)
-            print(f"Owner chose: {owner_action}")
-            game.handle_owner_turn(owner_action)
-            current_owner_state_tensor = get_dqn_state_representation(game, GRID_HEIGHT, GRID_WIDTH, precomputed_static_map_np)
-            game_turn_count += 1
-        
-        if current_entity == "OWNER" or game.get_current_turn_entity() == "OWNER": # Show grid after owner or if player's turn ended
-             game.print_grid_with_entities(player_pov=False)
-
-    print("\n--- FINAL TRAINED DQN AGENT GAME STATE ---")
-    game.print_grid_with_entities(player_pov=False)
-    if game.game_over: 
-        print(f"Result: {game.winner} wins after {game_turn_count} owner turns!")
-    elif game_turn_count >= MAX_TURNS_PER_EPISODE:
-        print(f"Max turns ({MAX_TURNS_PER_EPISODE}) reached in test run. No winner.")
-
 
 if __name__ == '__main__':
     train_agent()

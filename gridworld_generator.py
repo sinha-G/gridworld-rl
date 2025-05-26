@@ -466,7 +466,7 @@ class HotelGenerator:
             return
         
         if len(valid_rooms_for_spawn) == 1:
-            # print("Warning: Only one valid room. Player and Owner will spawn in the same room if possible, or hallway.")
+            # print("Warning: Only one valid room. Only Player will spawn in a room.")
             room_choice = valid_rooms_for_spawn[0]
             spawn_tiles = self._get_placeable_tiles_in_room(room_choice)
             random.shuffle(spawn_tiles)
@@ -475,10 +475,7 @@ class HotelGenerator:
                 self.grid[pr][pc] = self.PLAYER
             else: self._spawn_character_in_hallway(self.PLAYER)
             
-            if spawn_tiles:
-                or_val, oc_val = spawn_tiles.pop()
-                self.grid[or_val][oc_val] = self.OWNER
-            else: self._spawn_character_in_hallway(self.OWNER)
+            self._spawn_character_in_hallway(self.OWNER)
             return
 
         # len(valid_rooms_for_spawn) >= 2
@@ -631,16 +628,16 @@ class HotelGenerator:
 
 # --- Example Usage ---
 if __name__ == '__main__':
-    hotel_gen = HotelGenerator(height=10, width=10) 
+    hotel_gen = HotelGenerator(height=15, width=15) 
     try:
         grid = hotel_gen.generate_hotel(
             straightness_hallways=0.9,   # higher for straigher hallways
-            hall_loops=0,                # e.g., 24 loops for 40x30 grid
-            max_hallway_perc=0.05,       # proportion of grid to be hallways
-            max_rooms=0,                 # number of rooms to place
+            hall_loops=2,                # e.g., 24 loops for 40x30 grid
+            max_hallway_perc=0.04,       # proportion of grid to be hallways
+            max_rooms=1,                 # number of rooms to place
             room_min_size=2,
             room_max_size=3,
-            max_hiding_spots_per_room=1
+            max_hiding_spots_per_room=0
         )
         hotel_gen.print_grid()
         player_found = any(hotel_gen.PLAYER in row for row in grid)
